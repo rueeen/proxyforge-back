@@ -2,6 +2,10 @@
 # administrador para levantar Redis u otro broker; el progreso se persiste en SQLite.
 import logging
 import threading
+from io import BytesIO
+from uuid import uuid4
+
+from PIL import Image
 
 from django.core.files.base import ContentFile
 from django.db import connection
@@ -42,7 +46,11 @@ def generate_card_image(card, theme, provider=None):
         cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json["full_prompt"],
         prompt_json=prompt_json, provider=provider.name, prompt_version=PROMPT_VERSION,
     )
-    generated.image.save(f"{cache_key}.png", ContentFile(image_bytes), save=False)
+    with Image.open(BytesIO(image_bytes)) as image:
+        ext = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}.get(image.format)
+    if ext is None:
+        raise ValueError("Formato de imagen no compatible")
+    generated.image.save(f"{cache_key[:16]}-{uuid4().hex[:8]}.{ext}", ContentFile(image_bytes), save=False)
     generated.save()
     return generated
 
@@ -53,7 +61,7 @@ def run_job(job_id):
         job = GenerationJob.objects.select_related("deck").get(pk=job_id)
         job.status = "running"
         job.started_at = timezone.now()
-        job.save(update_fields=["status", "started_at"])
+        job.save(update_fields=["status", "started_at", "updated_at"])
         cards = _unique_cards(job.deck)
         provider = get_provider()
         for card in cards:
@@ -64,14 +72,14 @@ def run_job(job_id):
                 logger.exception("No se pudo generar arte para %s", card.name)
                 job.failed_cards += 1
                 job.error_message = str(exc)
-            job.save(update_fields=["completed_cards", "failed_cards", "error_message"])
+            job.save(update_fields=["completed_cards", "failed_cards", "error_message", "updated_at"])
         job.status = "failed" if cards and job.failed_cards == len(cards) else "done"
         job.finished_at = timezone.now()
-        job.save(update_fields=["status", "finished_at", "error_message"])
+        job.save(update_fields=["status", "finished_at", "error_message", "updated_at"])
     except Exception as exc:
         logger.exception("El job %s falló antes de completar el procesamiento", job_id)
         GenerationJob.objects.filter(pk=job_id).update(
-            status="failed", error_message=str(exc), finished_at=timezone.now()
+            status="failed", error_message=str(exc), finished_at=timezone.now(), updated_at=timezone.now()
         )
     finally:
         connection.close()

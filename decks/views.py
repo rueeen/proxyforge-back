@@ -9,7 +9,7 @@ from scryfall.client import resolve_cards
 
 from .models import Deck, DeckCard
 from .parser import parse_decklist
-from .serializers import DeckCreateSerializer, DeckDetailSerializer, DeckListSerializer
+from .serializers import DeckCreateSerializer, DeckDetailSerializer, DeckListSerializer, deck_detail_context
 
 
 class DeckCollectionView(APIView):
@@ -33,13 +33,14 @@ class DeckCollectionView(APIView):
                 )
                 for entry, card in zip(entries, resolution["resolved"])
             ])
-        return Response(DeckDetailSerializer(deck, context={"request": request}).data, status=status.HTTP_201_CREATED)
+        deck = Deck.objects.prefetch_related("cards__card").get(pk=deck.pk)
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data, status=status.HTTP_201_CREATED)
 
 
 class DeckDetailView(APIView):
     def get(self, request, deck_id):
         deck = get_object_or_404(Deck.objects.prefetch_related("cards__card"), pk=deck_id)
-        return Response(DeckDetailSerializer(deck, context={"request": request}).data)
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
 
     def delete(self, request, deck_id):
         get_object_or_404(Deck, pk=deck_id).delete()

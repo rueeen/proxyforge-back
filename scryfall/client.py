@@ -23,6 +23,13 @@ def _save_card(payload):
     first_face = faces[0] if faces else {}
     image_uris = payload.get("image_uris") or first_face.get("image_uris") or {}
     defaults = {
+        **{key: payload.get(key, first_face.get(key, "")) for key in ("power", "toughness", "loyalty")},
+        "keywords": payload.get("keywords", []),
+        "card_faces": [
+            {key: face.get(key, "") for key in (
+                "name", "mana_cost", "type_line", "oracle_text", "flavor_text", "power", "toughness", "loyalty"
+            )} for face in faces
+        ],
         "oracle_id": payload["oracle_id"],
         "name": payload["name"],
         "mana_cost": payload.get("mana_cost", first_face.get("mana_cost", "")),
