@@ -7,12 +7,14 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from decks.models import Deck, DeckCard
+from decks.serializers import DeckCardSerializer
+from .jobs import expire_stale_jobs
 
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import make_cache_key
 from .providers import get_provider, get_provider_name
 from .runner import generate_card_image, start_job
-from .serializers import GeneratedImageSerializer, GenerationJobSerializer
+from .serializers import GenerationJobSerializer
 
 
 def _unique_cards(deck):
@@ -25,6 +27,7 @@ def _unique_cards(deck):
 class GenerateDeckView(APIView):
     def post(self, request, deck_id):
         deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
         if deck.jobs.filter(status__in=["pending", "running"]).exists():
             return Response({"detail": "Ya hay un job activo para este mazo."}, status=status.HTTP_409_CONFLICT)
         job = GenerationJob.objects.create(deck=deck, total_cards=len(_unique_cards(deck)))
@@ -42,20 +45,21 @@ class RegenerateCardView(APIView):
         deck_card = get_object_or_404(DeckCard.objects.select_related("card", "deck"), pk=card_id)
         if not deck_card.card:
             return Response({"detail": "La carta no fue resuelta."}, status=status.HTTP_400_BAD_REQUEST)
-        theme = request.data.get("theme", deck_card.deck.theme)
-        if not isinstance(theme, str) or not theme.strip():
-            return Response({"theme": ["Debe ser un texto no vacío."]}, status=status.HTTP_400_BAD_REQUEST)
-        provider = get_provider()
-        key = make_cache_key(deck_card.card.oracle_id, theme, provider.name)
-        old = GeneratedImage.objects.filter(cache_key=key).first()
-        if old:
-            old.image.delete(save=False)
-            old.delete()
+        expire_stale_jobs(deck_card.deck)
+        if deck_card.deck.jobs.filter(status__in=["pending", "running"]).exists():
+            return Response({"detail": "Hay una generación en curso para este mazo."}, status=status.HTTP_409_CONFLICT)
+        theme = deck_card.deck.theme
         try:
+            provider = get_provider()
+            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name)
+            old = GeneratedImage.objects.filter(cache_key=key).first()
+            if old:
+                old.image.delete(save=False)
+                old.delete()
             generated = generate_card_image(deck_card.card, theme, provider)
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-        return Response(GeneratedImageSerializer(generated, context={"request": request}).data)
+        return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}}).data)
 
 
 class DeckEstimateView(APIView):

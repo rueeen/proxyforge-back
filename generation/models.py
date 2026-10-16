@@ -10,6 +10,7 @@ class GenerationJob(models.Model):
     ]
     deck = models.ForeignKey(Deck, related_name="jobs", on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    updated_at = models.DateTimeField(auto_now=True)
     total_cards = models.PositiveIntegerField()
     completed_cards = models.PositiveIntegerField(default=0)
     failed_cards = models.PositiveIntegerField(default=0)
