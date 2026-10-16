@@ -51,3 +51,16 @@ class GeneratedImageSummarySerializer(GeneratedImageSerializer):
 
     def get_frame_style(self, obj):
         return obj.prompt_json.get("frame_style")
+
+
+class TextField(serializers.CharField):
+    def to_internal_value(self, data):
+        if not isinstance(data, str):
+            self.fail("invalid")
+        return super().to_internal_value(data)
+
+
+class ThemeAssignmentInputSerializer(serializers.Serializer):
+    element = TextField(max_length=200)
+    category = TextField(max_length=60, allow_blank=True)
+    visual_brief = TextField()

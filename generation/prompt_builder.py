@@ -8,7 +8,7 @@ from anthropic import Anthropic, APIStatusError
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 EXPECTED_FIELDS = {"subject", "action", "setting", "palette", "style_notes", "composition", "full_prompt", "fallback_prompt", "concept_source", "themed_name", "themed_flavor", "frame_style"}
 SYSTEM_PROMPT = """Actúa como director de arte. Traduce los datos de una carta de Magic: The Gathering a una descripción visual original dentro del tema pedido. Conserva siempre su flavor mecánico: una remoción muestra destrucción, un buff potenciación y un contrahechizo interrupción.
 
@@ -24,6 +24,8 @@ Nunca reescribas el coste de maná, tipo, texto de reglas, fuerza/resistencia ni
 
 Deriva la paleta de sus colores de maná: blanco=luz/orden, azul=agua/conocimiento, negro=sombra/decadencia, rojo=fuego/caos, verde=naturaleza/crecimiento, incoloro=metal/vacío; para multicolor crea una mezcla coherente. La composición será horizontal, apaisada 16:9 y apta para recorte art_crop. La imagen contendrá solo ilustración: nunca texto, letras, números, logos, marcos de carta ni símbolos de maná.
 
+Si recibes assignment, representa exactamente ese elemento y nómbralo explícitamente en full_prompt, con sus rasgos canónicos: diseño, colores, vestuario, armas y escenario característicos de la franquicia, siguiendo visual_brief. Combina assignment con la mecánica de la carta y la ilustración original como referencia conceptual. fallback_prompt describe ese mismo elemento sin nombres propios, conservando sus rasgos visuales. themed_name debe partir del element asignado.
+
 Sigue el tema del usuario de forma literal y con máxima fidelidad. Si nombra franquicias, personajes, obras, estudios o artistas, úsalos por su nombre en full_prompt y describe con precisión sus rasgos característicos: diseño de personajes, vestuario, paleta, técnica y época.
 
 Con la ilustración original puedes conservar su composición, encuadre o pose si eso sirve al tema. Puedes también reinterpretarla por completo; decide lo que dé el mejor resultado. Si el tema pide el estilo de un artista concreto, incluido el artista original de la carta, aplícalo.
@@ -35,8 +37,10 @@ def normalize_theme(theme: str) -> str:
     return " ".join(theme.lower().split())
 
 
-def make_cache_key(oracle_id, theme: str, provider: str) -> str:
+def make_cache_key(oracle_id, theme: str, provider: str, assignment=None) -> str:
     value = f"{oracle_id}|{normalize_theme(theme)}|{PROMPT_VERSION}|{provider}"
+    if assignment is not None:
+        value += f"|{normalize_theme(assignment.element)}|{normalize_theme(assignment.visual_brief)}"
     return hashlib.sha256(value.encode()).hexdigest()
 
 
@@ -63,7 +67,7 @@ def _clean_json(raw: str) -> dict:
     return result
 
 
-def build_visual_prompt(card, theme: str) -> dict:
+def build_visual_prompt(card, theme: str, assignment=None) -> dict:
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     card_data = {
         "mana_cost": card.mana_cost, "power": card.power, "toughness": card.toughness,
@@ -72,6 +76,8 @@ def build_visual_prompt(card, theme: str) -> dict:
         "flavor_text": card.flavor_text, "colors": card.colors,
         "color_identity": card.color_identity, "theme": theme,
     }
+    if assignment is not None:
+        card_data["assignment"] = {key: getattr(assignment, key) for key in ("element", "category", "visual_brief")}
     text_block = {"type": "text", "text": json.dumps(card_data, ensure_ascii=False)}
     content = [text_block]
     if card.original_art_url:

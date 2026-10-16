@@ -58,7 +58,7 @@ class PromptTests(SimpleTestCase):
         self.assertNotIn("No copies la composición", SYSTEM_PROMPT)
         self.assertIn("Nunca reescribas el coste de maná", SYSTEM_PROMPT)
         self.assertIn("nunca texto, letras, números, logos", SYSTEM_PROMPT)
-        self.assertEqual(PROMPT_VERSION, "v2")
+        self.assertEqual(PROMPT_VERSION, "v3")
 
     def test_fallback_prompt_required_and_nonempty(self):
         data = valid_prompt()
@@ -187,7 +187,7 @@ class ContractTests(TestCase):
         image = self.generate()
         job = GenerationJob.objects.create(deck=self.deck, total_cards=1)
         url = f'/api/decks/{self.deck.pk}/'
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.get(url)
         data = response.json()
         self.assertEqual(data['active_job']['id'], job.id)
@@ -198,7 +198,7 @@ class ContractTests(TestCase):
         self.assertEqual(data['cards'][0]['card']['power'], '')
         for _ in range(10):
             DeckCard.objects.create(deck=self.deck, card=make_card(), raw_name='Other', quantity=1, section='main')
-        with self.assertNumQueries(6):
+        with self.assertNumQueries(7):
             response = self.client.get(url)
         self.assertEqual(response.json()['card_count'], 14)
         self.assertIsNone(response.json()['cards'][-1]['generated_image'])
@@ -304,7 +304,7 @@ class ContractTests(TestCase):
     def test_estimate_contract(self):
         self.generate()
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.pk}/estimate/').json(), {
-            'unique_cards': 1, 'cached': 1, 'to_generate': 0, 'estimated_cost_usd': 0.0})
+            'unique_cards': 1, 'cached': 1, 'to_generate': 0, 'estimated_cost_usd': 0.0, 'batch_limit': 5, 'batch_size': 0, 'batch_cost_usd': 0.0})
 
     def test_backfill_and_scryfall_faces(self):
         payload = {'power': '3', 'toughness': '4', 'keywords': ['Flying']}
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0003_backfill_card_data'), ('generation', '0002_generationjob_updated_at')]
+        after = [('decks', '0003_backfill_card_data'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

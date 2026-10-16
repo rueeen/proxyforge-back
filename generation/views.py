@@ -8,21 +8,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from decks.models import Deck, DeckCard
-from decks.serializers import DeckCardSerializer
+from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_detail_context
 from .jobs import expire_stale_jobs
 
-from .models import GeneratedImage, GenerationJob
+from .models import GeneratedImage, GenerationJob, ThemeAssignment
+from .selection import batch_limit, pending_entries, assignment_map
+from .theme_planner import build_theme_plan
 from .prompt_builder import make_cache_key
-from .providers import get_provider, get_provider_name
+from .providers import get_provider
 from .runner import render_card_image, save_card_image, start_job
-from .serializers import GenerationJobSerializer
-
-
-def _unique_cards(deck):
-    unique = {}
-    for card in deck.cards.filter(card__isnull=False).select_related("card"):
-        unique.setdefault(card.card.oracle_id, card.card)
-    return list(unique.values())
+from .serializers import GenerationJobSerializer, ThemeAssignmentInputSerializer
 
 
 class GenerateDeckView(APIView):
@@ -31,7 +26,15 @@ class GenerateDeckView(APIView):
         expire_stale_jobs(deck)
         if deck.jobs.filter(status__in=["pending", "running"]).exists():
             return Response({"detail": "Ya hay un job activo para este mazo."}, status=status.HTTP_409_CONFLICT)
-        job = GenerationJob.objects.create(deck=deck, total_cards=len(_unique_cards(deck)))
+        limit = request.data.get("limit", batch_limit())
+        if type(limit) is not int or limit < 1:
+            return Response({"limit": ["Debe ser un entero mayor o igual a 1."]}, status=400)
+        _, pending = pending_entries(deck)
+        selected = pending[:min(limit, batch_limit())]
+        if not selected:
+            return Response({"detail": "No hay cartas pendientes de generar."}, status=400)
+        job = GenerationJob.objects.create(deck=deck, total_cards=len(selected),
+                                          card_oracle_ids=[str(row.card.oracle_id) for row in selected])
         start_job(job)
         return Response(GenerationJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
 
@@ -49,34 +52,69 @@ class RegenerateCardView(APIView):
         expire_stale_jobs(deck_card.deck)
         if deck_card.deck.jobs.filter(status__in=["pending", "running"]).exists():
             return Response({"detail": "Hay una generación en curso para este mazo."}, status=status.HTTP_409_CONFLICT)
+        assignments = assignment_map(deck_card.deck)
+        assignment = assignments.get(deck_card.card.oracle_id)
         theme = deck_card.deck.theme
         try:
             provider = get_provider()
-            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name)
-            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider)
+            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment)
+            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment)
             with transaction.atomic():
                 old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
                 old_file = old.image if old else None
                 if old:
                     old.delete()
-                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes)
+                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment)
                 if old_file:
                     transaction.on_commit(lambda: old_file.delete(save=False))
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-        return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}}).data)
+        return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}, "assignments": assignments}).data)
 
 
 class DeckEstimateView(APIView):
     def get(self, request, deck_id):
         deck = get_object_or_404(Deck, pk=deck_id)
-        cards = _unique_cards(deck)
-        provider_name = get_provider_name()
-        keys = [make_cache_key(card.oracle_id, deck.theme, provider_name) for card in cards]
-        cached = GeneratedImage.objects.filter(cache_key__in=keys).count()
-        to_generate = len(cards) - cached
-        cost = Decimal(os.getenv("COST_PER_IMAGE_USD", "0.04")) * to_generate
+        entries, pending = pending_entries(deck)
+        to_generate = len(pending)
+        price = Decimal(os.getenv("COST_PER_IMAGE_USD", "0.04"))
+        size = min(batch_limit(), to_generate)
         return Response({
-            "unique_cards": len(cards), "cached": cached, "to_generate": to_generate,
-            "estimated_cost_usd": float(cost.quantize(Decimal("0.01"))),
+            "unique_cards": len(entries), "cached": len(entries) - to_generate, "to_generate": to_generate,
+            "estimated_cost_usd": float((price * to_generate).quantize(Decimal("0.01"))),
+            "batch_limit": batch_limit(), "batch_size": size,
+            "batch_cost_usd": float((price * size).quantize(Decimal("0.01"))),
         })
+
+
+class ThemePlanView(APIView):
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=["pending", "running"]).exists():
+            return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
+        overwrite = request.data.get("overwrite_edited", False)
+        if type(overwrite) is not bool:
+            return Response({"overwrite_edited": ["Debe ser un booleano."]}, status=400)
+        try:
+            build_theme_plan(deck, overwrite_edited=overwrite)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        deck = Deck.objects.prefetch_related("cards__card").get(pk=deck.pk)
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
+
+
+class ThemeAssignmentView(APIView):
+    def patch(self, request, card_id):
+        entry = get_object_or_404(DeckCard.objects.select_related("card", "deck"), pk=card_id)
+        if not entry.card_id:
+            return Response({"detail": "La carta no fue resuelta."}, status=400)
+        expire_stale_jobs(entry.deck)
+        if entry.deck.jobs.filter(status__in=["pending", "running"]).exists():
+            return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
+        serializer = ThemeAssignmentInputSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ThemeAssignment.objects.update_or_create(deck=entry.deck, oracle_id=entry.card.oracle_id,
+                                                defaults={**serializer.validated_data, "edited": True})
+        context = deck_detail_context(entry.deck, request)
+        return Response(DeckCardSerializer(entry, context=context).data)

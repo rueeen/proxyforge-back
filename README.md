@@ -37,6 +37,7 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `XAI_IMAGE_MODEL` | Modelo de Grok; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_RESOLUTION` | Resolución de Grok: `1k` (predeterminado) o `2k`. |
 | `XAI_IMAGE_QUALITY` | Calidad de Grok: `medium` (predeterminado), `low` o `auto`; solo se envía a modelos `grok-imagine-image-2*`. |
+| `MAX_CARDS_PER_JOB` | Máximo de cartas únicas pendientes por petición; predeterminado `5`. |
 | `COST_PER_IMAGE_USD` | Coste usado por la estimación; predeterminado `0.04`. |
 
 SQLite se configura automáticamente. Los jobs usan un thread del proceso web, por
@@ -122,7 +123,8 @@ curl -X POST http://127.0.0.1:8000/api/cards/1/regenerate/ \
 python manage.py test
 ```
 
-El detalle incluye `active_job` (job pending/running o null) y `card_count` (suma de cantidades).
+El detalle incluye `active_job` (job pending/running o null), `card_count` (suma de cantidades)
+y `has_theme_plan` (true si todas las cartas resueltas tienen asignación).
 Tanto creación como detalle y regeneración usan esta forma de `DeckCard`:
 
 ```json
@@ -143,6 +145,7 @@ Tanto creación como detalle y regeneración usan esta forma de `DeckCard`:
     "original_artist": "Christopher Rush", "layout": "normal",
     "power": "", "toughness": "", "loyalty": "", "keywords": [], "card_faces": []
   },
+  "theme_assignment": {"element": "Espina fulminante", "category": "Fenómeno", "visual_brief": "Una espina descarga energía sobre una criatura entre flores", "edited": false},
   "generated_image": {
     "id": 3,
     "image_url": "http://127.0.0.1:8000/media/generated/0123456789abcdef-ab123456.jpg",
@@ -155,7 +158,8 @@ Tanto creación como detalle y regeneración usan esta forma de `DeckCard`:
 ```
 
 `card` es null si la entrada no se resolvió; `generated_image` es null si no existe
-una imagen para oracle_id, tema y proveedor actuales. Las caras incluyen name,
+una imagen para oracle_id, tema, proveedor y asignación actuales.
+`theme_assignment` es null si no hay asignación o si la entrada no está resuelta. Las caras incluyen name,
 mana_cost, type_line, oracle_text, flavor_text, power, toughness y loyalty; los campos
 faltantes son cadenas vacías. Las cartas de una cara tienen `card_faces: []`.
 
@@ -163,15 +167,88 @@ La regeneración devuelve el DeckCard completo con status 200; un job activo dev
 409 con `{"detail":"Hay una generación en curso para este mazo."}` y un fallo del
 proveedor devuelve 502 con `{"detail":"<mensaje>"}`. No acepta un tema alternativo.
 
-La estimación conserva exactamente estas claves:
+La estimación conserva las claves originales y agrega el coste y tamaño de la siguiente tanda:
 
 ```json
-{"unique_cards": 30, "cached": 10, "to_generate": 20, "estimated_cost_usd": 0.8}
+{"unique_cards": 67, "cached": 10, "to_generate": 57, "estimated_cost_usd": 2.28, "batch_limit": 5, "batch_size": 5, "batch_cost_usd": 0.20}
 ```
 
-El prompt v2 usa la ilustración original como referencia conceptual, sin copiar
-composición ni estilo; si Claude no puede descargarla, reintenta una vez sin ella.
-El caché v1 queda invalidado; sus metadatos temáticos ausentes se serializan como
+El prompt v3 combina el elemento asignado con la mecánica y la ilustración original; si Claude no puede descargarla, reintenta una vez sin ella.
+Los cachés v1/v2 quedan invalidados; sus metadatos temáticos ausentes se serializan como
 cadenas vacías y frame_style null. Las imágenes nuevas conservan su formato real
 PNG, JPEG o WEBP y usan nombres únicos para evitar el caché del navegador.
 Los tests mockean las APIs externas y no requieren claves.
+
+
+## Tandas y plan temático
+
+Cada petición genera como máximo `MAX_CARDS_PER_JOB` cartas únicas pendientes
+(default 5), en orden commander → main → sideboard y después por orden de importación.
+Las cartas ya cacheadas se omiten. El job persiste los oracle_id seleccionados y
+procesa solo esa tanda. Sin pendientes responde 400. Puedes pedir menos cartas:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/generate/ \
+  -H 'Content-Type: application/json' -d '{"limit":2}'
+```
+
+`limit` debe ser un entero positivo; un valor mayor se recorta al máximo configurado.
+El estimado incluye `batch_size = min(batch_limit, to_generate)` y `batch_cost_usd`.
+Los costes mostrados corresponden a imágenes; no incluyen el plan ni prompts de Claude.
+
+El plan hace una llamada a Claude para asignar un elemento concreto y distinto a cada
+carta única según su función, incluyendo personajes y referencias canónicas si el tema
+es una franquicia, o sujetos variados si es una estética. Si faltan asignaciones, hace
+un único reintento solo con las cartas faltantes. Puede prepararse antes de generar:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/theme-plan/ \
+  -H 'Content-Type: application/json' -d '{"overwrite_edited":false}'
+curl -X PATCH http://127.0.0.1:8000/api/cards/12/theme-assignment/ \
+  -H 'Content-Type: application/json' \
+  -d '{"element":"Storm Eagle","category":"Jefe Maverick","visual_brief":"Storm Eagle en picada sobre la cubierta de una aeronave, soltando ráfagas de viento."}'
+```
+
+El POST es síncrono y devuelve el detalle del mazo (502 si Claude falla). Conserva las
+asignaciones editadas salvo `overwrite_edited:true`. El PATCH requiere los tres campos;
+`category` admite cadena vacía, y marca `edited:true`. Devuelve el DeckCard completo;
+una carta sin resolver responde 400. Ambos rechazan cambios durante un job activo (409).
+
+El job prepara el plan si ninguna carta seleccionada tiene asignación; si falla,
+termina en failed. La regeneración usa la asignación existente sin replanificar.
+Modificar `element` o `visual_brief` invalida su imagen: vuelve a estar pendiente.
+La versión v3 invalida imágenes de versiones anteriores. El plan se consulta en
+`theme_assignment` de cada entrada y `has_theme_plan` del detalle.
+
+## Formatos de importación
+
+Se aceptan listas de Card Kingdom, Moxfield, Archidekt, MTGGoldfish y EDHREC en texto
+o CSV. En texto: `4 Lightning Bolt`, `4x Lightning Bolt`, `4 x Lightning Bolt`,
+tabuladores y nombres sin cantidad (default 1). Se reconocen `(C21) 263`, `[C21]`,
+marcadores `*F*`/`*E*`/`*Foil*`, etiquetas finales `[Ramp]` y `#tags`, y `SB: 2 Negate`.
+Las cabeceras main/deck/mazo/mainboard/maindeck, sideboard/banquillo y
+commander/commanders/comandante admiten mayúsculas, `:` y conteos `(15)`.
+Companion, Maybeboard y Considering se ignoran hasta la siguiente cabecera.
+También se omiten líneas vacías, comentarios `//` o `#`, `About` y `Name ...`.
+
+CSV reconoce nombre (`name`, `card name`, `card`, `nombre`), cantidad (`quantity`,
+`qty`, `count`, `cantidad`, default 1), set (`set code`, `set`, `edition code`, solo
+códigos alfanuméricos de 3–5 caracteres) y número (`collector number`, `number`,
+`collector #`). Las cabeceras no distinguen mayúsculas y se ignoran filas sin nombre.
+
+```csv
+Quantity,Card Name,Set Code,Collector Number
+1,Sol Ring,C21,263
+4,Lightning Bolt,,
+```
+
+## Simbología de maná
+
+```bash
+curl http://127.0.0.1:8000/api/symbology/
+```
+
+Devuelve una lista `[{"symbol":"{R}","svg_uri":"https://svgs.scryfall.io/card-symbols/R.svg","english":"one red mana"}]`.
+Los datos de Scryfall se cachean 7 días en `media/cache/symbology.json`. Si el servicio
+falla, se usa el caché vencido; sin caché responde 502. El frontend puede usar estos
+SVG para componer la capa de texto; debe tener acceso a `svgs.scryfall.io`.
