@@ -1,5 +1,6 @@
 import importlib
 import json
+import os
 import tempfile
 from datetime import timedelta
 from io import BytesIO
@@ -107,6 +108,7 @@ class PromptTests(SimpleTestCase):
         self.assertEqual(build_visual_prompt(Card(name='Tree'), 'tema'), valid_prompt())
 
 
+@patch.dict(os.environ, {"IMAGE_FALLBACK_PROVIDER": ""})
 class RenderTests(SimpleTestCase):
     def setUp(self):
         self.card = Card(name="Tree")
@@ -154,11 +156,12 @@ class RenderTests(SimpleTestCase):
     def test_invalid_fallback_is_not_returned(self, build):
         self.provider.generate.side_effect = [RuntimeError("full rejected"), b"invalid fallback"]
         with self.assertLogs("generation.runner", level="WARNING"):
-            with self.assertRaisesRegex(RuntimeError, "full rejected.*fallback_prompt"):
+            with self.assertRaisesRegex(RuntimeError, "full rejected.*gemini/fallback"):
                 render_card_image(self.card, "tema", self.provider)
         self.assertEqual(self.provider.generate.call_count, 2)
 
 
+@patch.dict(os.environ, {"IMAGE_FALLBACK_PROVIDER": ""})
 @override_settings(IMAGE_PROVIDER='gemini')
 class ContractTests(TestCase):
     def setUp(self):
@@ -254,7 +257,7 @@ class ContractTests(TestCase):
         old = self.generate()
         old_name = old.image.name
         provider.return_value = self.provider
-        render.return_value = ({**valid_prompt(), "used_prompt": "full"}, self.provider.generate.return_value)
+        render.return_value = ({**valid_prompt(), "used_prompt": "full", "used_provider": "gemini"}, self.provider.generate.return_value)
         with self.captureOnCommitCallbacks(execute=True) as callbacks:
             response = self.client.post(f"/api/cards/{self.entry.pk}/regenerate/", data={}, content_type="application/json")
         self.assertEqual(response.status_code, 502)

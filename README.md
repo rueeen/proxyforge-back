@@ -31,7 +31,12 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `ANTHROPIC_API_KEY` | Generación del prompt visual con Claude. |
 | `GEMINI_API_KEY` | Imágenes con el proveedor predeterminado Gemini. |
 | `OPENAI_API_KEY` | Imágenes si `IMAGE_PROVIDER=openai`. |
-| `IMAGE_PROVIDER` | `gemini` (predeterminado) u `openai`. |
+| `IMAGE_PROVIDER` | Principal: `gemini` (predeterminado), `openai` o `grok`. |
+| `IMAGE_FALLBACK_PROVIDER` | Respaldo opcional: `gemini`, `openai` o `grok`; vacío o igual al principal lo desactiva. |
+| `XAI_API_KEY` | Clave de xAI para Grok Imagine. |
+| `XAI_IMAGE_MODEL` | Modelo de Grok; predeterminado `grok-imagine-image-2.0`. |
+| `XAI_IMAGE_RESOLUTION` | Resolución de Grok: `1k` (predeterminado) o `2k`. |
+| `XAI_IMAGE_QUALITY` | Calidad de Grok: `medium` (predeterminado), `low` o `auto`; solo se envía a modelos `grok-imagine-image-2*`. |
 | `COST_PER_IMAGE_USD` | Coste usado por la estimación; predeterminado `0.04`. |
 
 SQLite se configura automáticamente. Los jobs usan un thread del proceso web, por
@@ -67,8 +72,25 @@ El tema se aplica literalmente, incluidas franquicias, personajes y estilos de
 artista. Claude produce un `full_prompt` fiel al tema y un `fallback_prompt` de
 la misma escena que sustituye nombres propios por descripciones visuales. Si el
 proveedor rechaza el prompt original o devuelve una imagen inválida, se intenta
-el fallback una sola vez. Se registra cuál produjo la imagen. La ilustración
+el fallback una sola vez con el principal. Si también falla y hay un respaldo
+configurado, se intenta ese proveedor únicamente con el fallback:
+principal completo → principal fallback → respaldo fallback. Se detiene al obtener
+una imagen válida y se registran el prompt y el proveedor efectivos. La ilustración
 no incluye texto ni marcos; las características jugables de la carta se conservan.
+
+Por ejemplo, `IMAGE_PROVIDER=grok` con `IMAGE_FALLBACK_PROVIDER=gemini` usa Gemini
+solo después de que fallen los dos intentos de Grok. Se necesitan las claves de
+ambos proveedores para esa configuración.
+
+Ajusta `COST_PER_IMAGE_USD` al proveedor principal. Como referencia, la documentación
+de xAI indica aproximadamente USD 0,02 por imagen en `grok-imagine-image` y
+USD 0,04–0,08 en `grok-imagine-image-2.0`, según resolución. El estimado no incluye
+posibles costes adicionales de reintentos o del respaldo.
+
+Cambiar `IMAGE_PROVIDER` cambia las `cache_key`: las imágenes del proveedor anterior
+se conservan, pero no se muestran hasta volver a seleccionarlo. Cuando se usa un
+respaldo, la clave de caché sigue usando el principal y el registro guarda el
+proveedor que efectivamente produjo la imagen.
 
 Al regenerar, el arte anterior se conserva si falla el renderizado. Su archivo
 solo se elimina después de guardar y confirmar el reemplazo.
