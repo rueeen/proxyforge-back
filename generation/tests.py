@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0003_backfill_card_data'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
+        after = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

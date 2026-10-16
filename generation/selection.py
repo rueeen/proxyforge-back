@@ -27,9 +27,48 @@ def assignment_map(deck):
 
 
 def pending_entries(deck):
+    from .theme_interview import deck_brief
+
+    brief = deck_brief(deck)
     entries = unique_entries(deck)
     assignments = assignment_map(deck)
     keys = {row.card.oracle_id: make_cache_key(row.card.oracle_id, deck.theme, get_provider_name(),
-                                             assignments.get(row.card.oracle_id)) for row in entries}
+                                             assignments.get(row.card.oracle_id), brief) for row in entries}
     cached = set(GeneratedImage.objects.filter(cache_key__in=keys.values()).values_list('cache_key', flat=True))
     return entries, [row for row in entries if keys[row.card.oracle_id] not in cached]
+
+
+def type_words(type_line):
+    import re
+    import unicodedata
+
+    plain = ''.join(char for char in unicodedata.normalize('NFD', type_line.casefold())
+                    if not unicodedata.combining(char))
+    # Subtypes do not change the card's main category.
+    return set(re.findall(r'\w+', plain.split('—', 1)[0]))
+
+
+def is_basic_land(type_line):
+    words = type_words(type_line)
+    return bool(words & {'land', 'tierra'}) and bool(words & {'basic', 'basica', 'basico'})
+
+
+def card_category(type_line):
+    words = type_words(type_line)
+    if words & {'land', 'tierra'}:
+        return 'basic_land' if is_basic_land(type_line) else 'land'
+    if type_words(type_line.replace('—', ' ')) & {'equipment', 'equipo'}:
+        return 'equipment'
+    # Vehicle is a subtype, so include the complete line for this check.
+    if type_words(type_line.replace('—', ' ')) & {'vehicle', 'vehiculo'}:
+        return 'vehicle'
+    if words & {'creature', 'criatura'}:
+        return 'legendary_creature' if words & {'legendary', 'legendaria', 'legendario'} else 'creature'
+    for category, names in (
+        ('planeswalker', {'planeswalker'}), ('artifact_other', {'artifact', 'artefacto'}),
+        ('enchantment', {'enchantment', 'encantamiento'}), ('instant', {'instant', 'instantaneo'}),
+        ('sorcery', {'sorcery', 'conjuro'}),
+    ):
+        if words & names:
+            return category
+    return None

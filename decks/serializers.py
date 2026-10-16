@@ -4,6 +4,7 @@ from rest_framework import serializers
 from generation.prompt_builder import make_cache_key
 from generation.models import GeneratedImage
 from generation.selection import assignment_map
+from generation.theme_interview import deck_brief
 from generation.serializers import GeneratedImageSummarySerializer, GenerationJobSerializer
 from generation.jobs import expire_stale_jobs
 from generation.providers import get_provider_name
@@ -38,7 +39,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
     def get_generated_image(self, obj):
         if not obj.card_id:
             return None
-        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id))
+        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"))
         generated = self.context.get("generated_images", {}).get(key)
         if not generated:
             return None
@@ -47,7 +48,19 @@ class DeckCardSerializer(serializers.ModelSerializer):
 
 class DeckDetailSerializer(serializers.ModelSerializer):
     cards = DeckCardSerializer(many=True, read_only=True)
+    theme_brief = serializers.SerializerMethodField()
+    theme_plan_stale = serializers.SerializerMethodField()
     has_theme_plan = serializers.SerializerMethodField()
+
+    def get_theme_brief(self, obj):
+        return self.context.get("brief", [])
+
+    def get_theme_plan_stale(self, obj):
+        if not obj.theme_answers_updated_at or not self.get_has_theme_plan(obj):
+            return False
+        latest = max((item.updated_at for item in self.context.get("assignments", {}).values()
+                      if not item.edited), default=None)
+        return latest is not None and obj.theme_answers_updated_at > latest
 
     def get_has_theme_plan(self, obj):
         assignments = self.context.get("assignments", {})
@@ -64,7 +77,8 @@ class DeckDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Deck
-        fields = ["id", "name", "raw_list", "theme", "created_at", "cards", "active_job", "card_count", "has_theme_plan"]
+        fields = ["id", "name", "raw_list", "theme", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
+                  "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale"]
 
 
 class DeckListSerializer(serializers.ModelSerializer):
@@ -81,15 +95,18 @@ class DeckCreateSerializer(serializers.ModelSerializer):
         fields = ["name", "raw_list", "theme"]
 
 
-def deck_detail_context(deck, request):
+def deck_detail_context(deck, request, brief=None):
     prefetch_related_objects([deck], "cards__card")
     expire_stale_jobs(deck)
     assignments = assignment_map(deck)
-    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id))
+    if brief is None:
+        brief = deck_brief(deck)
+    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id), brief)
             for entry in deck.cards.all() if entry.card_id]
     return {
         "request": request,
         "assignments": assignments,
+        "brief": brief,
         "generated_images": {image.cache_key: image for image in GeneratedImage.objects.filter(cache_key__in=keys)},
         "active_job": deck.jobs.filter(status__in=["pending", "running"]).order_by("-id").first(),
     }

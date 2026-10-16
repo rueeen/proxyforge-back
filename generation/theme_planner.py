@@ -9,15 +9,19 @@ from django.db import transaction
 from .models import ThemeAssignment
 from .prompt_builder import normalize_theme
 from .selection import unique_entries
+from .theme_interview import deck_brief
 
 SYSTEM_PROMPT = """Planifica un mazo de Magic dentro del tema solicitado. Usa referencias canónicas y específicas: personajes, enemigos, jefes, armas, ítems, vehículos, lugares, escenarios y eventos reales de la franquicia. Prefiere variedad y profundidad, no solo protagonistas.
 Asigna según función: comandante y criaturas legendarias a personajes principales o icónicos; criaturas según color, coste, fuerza/resistencia y habilidades (grandes y caras: jefes; baratas: enemigos comunes); equipos y armas a armas, mejoras o power-ups (armas de jefes o partes de armadura); vehículos a monturas o vehículos como Ride Armor; otros artefactos a ítems, tecnología y dispositivos como Sub Tank o Heart Tank; tierras a lugares y escenarios distintos para cada tipo de básica; instantáneos y conjuros a ataques, técnicas o momentos de historia; encantamientos a estados, poderes, tecnologías o fenómenos persistentes; planeswalkers a personajes clave con poder de mando.
 El elemento debe encajar con la mecánica: remoción es ataque destructivo, contrahechizo es interrupción, robo de cartas es inteligencia o información. No repitas element entre cartas ni elementos ya usados. Si faltan elementos, varía escena, momento o aspecto (Zero — Z-Saber, primer plano; Zero — dash aéreo).
 Si el tema es una estética, asigna sujetos concretos y variados con la misma lógica. visual_brief debe describir en 1-3 frases qué se ve, qué hace y dónde: Storm Eagle en picada sobre la cubierta de la aeronave, soltando ráfagas que arrastran a un Reploid.
+brief contiene decisiones obligatorias del usuario. Si define quién representa al comandante, asigna exactamente ese elemento a la carta de sección commander. Si define facción, época o versión, todas las asignaciones deben respetarlas; permite excepciones puntuales coherentes como enemigos de otra facción en remociones. Respeta la representación de tierras o de otras categorías elegida. El estilo visual no cambia element, pero debe reflejarse en visual_brief.
 Responde solo JSON válido: {"assignments": [{"oracle_id": "...", "element": "...", "category": "...", "visual_brief": "..."}]}. element máximo 200 caracteres, category máximo 60."""
 
 
-def build_theme_plan(deck, overwrite_edited=False):
+def build_theme_plan(deck, overwrite_edited=False, brief=None):
+    if brief is None:
+        brief = deck_brief(deck)
     entries = unique_entries(deck)
     ids = {row.card.oracle_id for row in entries}
     existing = {item.oracle_id: item for item in deck.theme_assignments.all()}
@@ -36,7 +40,7 @@ def build_theme_plan(deck, overwrite_edited=False):
         response = client.messages.create(
             model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6'), max_tokens=16000,
             system=SYSTEM_PROMPT, messages=[{'role': 'user', 'content': json.dumps(
-                {'theme': deck.theme, 'cards': cards, 'used_elements': used_elements}, ensure_ascii=False)}])
+                {'theme': deck.theme, 'cards': cards, 'used_elements': used_elements, 'brief': brief}, ensure_ascii=False)}])
         raw = ''.join(block.text for block in response.content if getattr(block, 'type', '') == 'text')
         data = json.loads(re.sub(r'\s*```$', '', re.sub(r'^```(?:json)?\s*', '', raw.strip())))
         if not isinstance(data, dict) or not isinstance(data.get('assignments'), list):

@@ -2,6 +2,7 @@ import os
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.response import Response
@@ -14,6 +15,7 @@ from .jobs import expire_stale_jobs
 from .models import GeneratedImage, GenerationJob, ThemeAssignment
 from .selection import batch_limit, pending_entries, assignment_map
 from .theme_planner import build_theme_plan
+from .theme_interview import build_theme_questions, deck_brief, validate_theme_answers
 from .prompt_builder import make_cache_key
 from .providers import get_provider
 from .runner import render_card_image, save_card_image, start_job
@@ -52,24 +54,25 @@ class RegenerateCardView(APIView):
         expire_stale_jobs(deck_card.deck)
         if deck_card.deck.jobs.filter(status__in=["pending", "running"]).exists():
             return Response({"detail": "Hay una generación en curso para este mazo."}, status=status.HTTP_409_CONFLICT)
+        brief = deck_brief(deck_card.deck)
         assignments = assignment_map(deck_card.deck)
         assignment = assignments.get(deck_card.card.oracle_id)
         theme = deck_card.deck.theme
         try:
             provider = get_provider()
-            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment)
-            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment)
+            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief)
+            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief)
             with transaction.atomic():
                 old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
                 old_file = old.image if old else None
                 if old:
                     old.delete()
-                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment)
+                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment, brief)
                 if old_file:
                     transaction.on_commit(lambda: old_file.delete(save=False))
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
-        return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}, "assignments": assignments}).data)
+        return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}, "assignments": assignments, "brief": brief}).data)
 
 
 class DeckEstimateView(APIView):
@@ -96,12 +99,13 @@ class ThemePlanView(APIView):
         overwrite = request.data.get("overwrite_edited", False)
         if type(overwrite) is not bool:
             return Response({"overwrite_edited": ["Debe ser un booleano."]}, status=400)
+        brief = deck_brief(deck)
         try:
-            build_theme_plan(deck, overwrite_edited=overwrite)
+            build_theme_plan(deck, overwrite_edited=overwrite, brief=brief)
         except Exception as exc:
             return Response({"detail": str(exc)}, status=502)
         deck = Deck.objects.prefetch_related("cards__card").get(pk=deck.pk)
-        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request, brief=brief)).data)
 
 
 class ThemeAssignmentView(APIView):
@@ -118,3 +122,36 @@ class ThemeAssignmentView(APIView):
                                                 defaults={**serializer.validated_data, "edited": True})
         context = deck_detail_context(entry.deck, request)
         return Response(DeckCardSerializer(entry, context=context).data)
+
+
+class ThemeQuestionsView(APIView):
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=["pending", "running"]).exists():
+            return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
+        try:
+            questions = build_theme_questions(deck)
+        except Exception as exc:
+            return Response({"detail": str(exc)}, status=502)
+        deck.theme_questions = questions
+        deck.theme_answers = {}
+        deck.theme_answers_updated_at = None
+        deck.save(update_fields=["theme_questions", "theme_answers", "theme_answers_updated_at"])
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
+
+
+class ThemeAnswersView(APIView):
+    def put(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=["pending", "running"]).exists():
+            return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
+        try:
+            answers = validate_theme_answers(deck, request.data.get("answers"))
+        except ValueError as exc:
+            return Response({"answers": [str(exc)]}, status=400)
+        deck.theme_answers = answers
+        deck.theme_answers_updated_at = timezone.now()
+        deck.save(update_fields=["theme_answers", "theme_answers_updated_at"])
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
