@@ -3,7 +3,10 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
+from scryfall.views import SymbologyView
+
 urlpatterns = [
+    path("api/symbology/", SymbologyView.as_view(), name="symbology"),
     path("admin/", admin.site.urls),
     path("api/", include("decks.urls")),
     path("api/", include("generation.urls")),

@@ -13,6 +13,8 @@ from django.utils import timezone
 
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
+from .selection import unique_entries, assignment_map
+from .theme_planner import build_theme_plan
 from .providers import get_fallback_provider, get_provider
 
 logger = logging.getLogger(__name__)
@@ -24,16 +26,6 @@ def start_job(job: GenerationJob):
     return thread
 
 
-def _unique_cards(deck):
-    cards = []
-    seen = set()
-    for deck_card in deck.cards.select_related("card").filter(card__isnull=False).order_by("id"):
-        if deck_card.card.oracle_id not in seen:
-            seen.add(deck_card.card.oracle_id)
-            cards.append(deck_card.card)
-    return cards
-
-
 def _image_extension(image_bytes):
     with Image.open(BytesIO(image_bytes)) as image:
         extension = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}.get(image.format)
@@ -43,9 +35,9 @@ def _image_extension(image_bytes):
     return extension
 
 
-def render_card_image(card, theme, provider) -> tuple[dict, bytes]:
+def render_card_image(card, theme, provider, assignment=None) -> tuple[dict, bytes]:
     """Llama a Claude y al proveedor; no toca la base de datos."""
-    prompt_json = build_visual_prompt(card, theme)
+    prompt_json = build_visual_prompt(card, theme, assignment) if assignment is not None else build_visual_prompt(card, theme)
     fallback_provider = get_fallback_provider()
     attempts = [(provider, "full"), (provider, "fallback")]
     if fallback_provider is not None:
@@ -68,10 +60,10 @@ def render_card_image(card, theme, provider) -> tuple[dict, bytes]:
     raise RuntimeError("; ".join(failures)) from last_error
 
 
-def save_card_image(card, theme, provider, prompt_json, image_bytes) -> GeneratedImage:
+def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=None) -> GeneratedImage:
     """Detecta formato, guarda el archivo con nombre único y crea el registro."""
     extension = _image_extension(image_bytes)
-    cache_key = make_cache_key(card.oracle_id, theme, provider.name)
+    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment)
     prompt_key = "fallback_prompt" if prompt_json["used_prompt"] == "fallback" else "full_prompt"
     generated = GeneratedImage(
         cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json[prompt_key],
@@ -88,14 +80,14 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes) -> Generate
     return generated
 
 
-def generate_card_image(card, theme, provider=None):
+def generate_card_image(card, theme, provider=None, assignment=None):
     provider = provider or get_provider()
-    cache_key = make_cache_key(card.oracle_id, theme, provider.name)
+    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment)
     existing = GeneratedImage.objects.filter(cache_key=cache_key).first()
     if existing:
         return existing
-    prompt_json, image_bytes = render_card_image(card, theme, provider)
-    return save_card_image(card, theme, provider, prompt_json, image_bytes)
+    prompt_json, image_bytes = render_card_image(card, theme, provider, assignment)
+    return save_card_image(card, theme, provider, prompt_json, image_bytes, assignment)
 
 
 def run_job(job_id):
@@ -105,11 +97,16 @@ def run_job(job_id):
         job.status = "running"
         job.started_at = timezone.now()
         job.save(update_fields=["status", "started_at", "updated_at"])
-        cards = _unique_cards(job.deck)
+        selected = set(job.card_oracle_ids)
+        cards = [row.card for row in unique_entries(job.deck) if str(row.card.oracle_id) in selected]
+        assignments = assignment_map(job.deck)
+        if cards and not any(card.oracle_id in assignments for card in cards):
+            build_theme_plan(job.deck)
+            assignments = assignment_map(job.deck)
         provider = get_provider()
         for card in cards:
             try:
-                generate_card_image(card, job.deck.theme, provider)
+                generate_card_image(card, job.deck.theme, provider, assignments.get(card.oracle_id))
                 job.completed_cards += 1
             except Exception as exc:  # Continue so one provider failure does not abort the deck.
                 logger.exception("No se pudo generar arte para %s", card.name)

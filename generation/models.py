@@ -11,6 +11,7 @@ class GenerationJob(models.Model):
     deck = models.ForeignKey(Deck, related_name="jobs", on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     updated_at = models.DateTimeField(auto_now=True)
+    card_oracle_ids = models.JSONField(default=list)
     total_cards = models.PositiveIntegerField()
     completed_cards = models.PositiveIntegerField(default=0)
     failed_cards = models.PositiveIntegerField(default=0)
@@ -29,3 +30,16 @@ class GeneratedImage(models.Model):
     provider = models.CharField(max_length=50)
     prompt_version = models.CharField(max_length=20)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class ThemeAssignment(models.Model):
+    deck = models.ForeignKey(Deck, related_name="theme_assignments", on_delete=models.CASCADE)
+    oracle_id = models.UUIDField()
+    element = models.CharField(max_length=200)
+    category = models.CharField(max_length=60)
+    visual_brief = models.TextField()
+    edited = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [("deck", "oracle_id")]

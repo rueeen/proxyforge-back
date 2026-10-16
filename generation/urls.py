@@ -1,8 +1,10 @@
 from django.urls import path
 
-from .views import DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
+from .views import ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
 
 urlpatterns = [
+    path("decks/<int:deck_id>/theme-plan/", ThemePlanView.as_view(), name="theme-plan"),
+    path("cards/<int:card_id>/theme-assignment/", ThemeAssignmentView.as_view(), name="theme-assignment"),
     path("decks/<int:deck_id>/generate/", GenerateDeckView.as_view(), name="generate-deck"),
     path("decks/<int:deck_id>/estimate/", DeckEstimateView.as_view(), name="deck-estimate"),
     path("jobs/<int:job_id>/", JobDetailView.as_view(), name="job-detail"),
