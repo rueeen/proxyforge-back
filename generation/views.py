@@ -1,6 +1,7 @@
 import os
 from decimal import Decimal
 
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.response import Response
@@ -13,7 +14,7 @@ from .jobs import expire_stale_jobs
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import make_cache_key
 from .providers import get_provider, get_provider_name
-from .runner import generate_card_image, start_job
+from .runner import render_card_image, save_card_image, start_job
 from .serializers import GenerationJobSerializer
 
 
@@ -52,11 +53,15 @@ class RegenerateCardView(APIView):
         try:
             provider = get_provider()
             key = make_cache_key(deck_card.card.oracle_id, theme, provider.name)
-            old = GeneratedImage.objects.filter(cache_key=key).first()
-            if old:
-                old.image.delete(save=False)
-                old.delete()
-            generated = generate_card_image(deck_card.card, theme, provider)
+            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider)
+            with transaction.atomic():
+                old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
+                old_file = old.image if old else None
+                if old:
+                    old.delete()
+                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes)
+                if old_file:
+                    transaction.on_commit(lambda: old_file.delete(save=False))
         except Exception as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}}).data)

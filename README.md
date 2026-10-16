@@ -61,6 +61,18 @@ curl http://127.0.0.1:8000/api/decks/1/
 curl -X DELETE http://127.0.0.1:8000/api/decks/1/
 ```
 
+## Generación
+
+El tema se aplica literalmente, incluidas franquicias, personajes y estilos de
+artista. Claude produce un `full_prompt` fiel al tema y un `fallback_prompt` de
+la misma escena que sustituye nombres propios por descripciones visuales. Si el
+proveedor rechaza el prompt original o devuelve una imagen inválida, se intenta
+el fallback una sola vez. Se registra cuál produjo la imagen. La ilustración
+no incluye texto ni marcos; las características jugables de la carta se conservan.
+
+Al regenerar, el arte anterior se conserva si falla el renderizado. Su archivo
+solo se elimina después de guardar y confirmar el reemplazo.
+
 Estimar y lanzar una generación:
 
 ```bash
