@@ -152,7 +152,7 @@ class BatchAndPlanTests(TestCase):
     def test_plan_endpoint_and_conflict(self, build):
         url = f'/api/decks/{self.deck.pk}/theme-plan/'
         self.assertEqual(self.client.post(url, {}, content_type='application/json').status_code, 200)
-        build.assert_called_once_with(self.deck, overwrite_edited=False)
+        build.assert_called_once_with(self.deck, overwrite_edited=False, brief=[])
         build.side_effect = RuntimeError('Claude unavailable')
         result = self.client.post(url, {}, content_type='application/json')
         self.assertEqual(result.status_code, 502)
@@ -176,11 +176,11 @@ class BatchAndPlanTests(TestCase):
     def test_run_job_selected_only_and_plan_failure(self, build, provider, generate, close):
         selected = self.entries[2]
         job = GenerationJob.objects.create(deck=self.deck, total_cards=1, card_oracle_ids=[str(selected.card.oracle_id)])
-        def plan(deck):
+        def plan(deck, brief=None):
             ThemeAssignment.objects.create(deck=deck, **assignment(selected.card))
         build.side_effect = plan
         run_job(job.id)
-        build.assert_called_once_with(self.deck)
+        build.assert_called_once_with(self.deck, brief=[])
         self.assertEqual(generate.call_count, 1)
         self.assertEqual(generate.call_args.args[0], selected.card)
         self.assertEqual(generate.call_args.args[3].element, 'Storm Eagle')
@@ -238,7 +238,7 @@ class BatchAndPlanTests(TestCase):
         with patch('generation.views.build_theme_plan') as build:
             result = self.client.post(f'/api/cards/{entry.pk}/regenerate/', {}, content_type='application/json')
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(render.call_args.args[-1], planned)
-        self.assertEqual(save.call_args.args[-1], planned)
+        self.assertEqual(render.call_args.args[3], planned)
+        self.assertEqual(save.call_args.args[5], planned)
         self.assertEqual(result.json()['theme_assignment']['element'], 'Storm Eagle')
         build.assert_not_called()

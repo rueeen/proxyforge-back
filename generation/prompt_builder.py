@@ -24,6 +24,8 @@ Nunca reescribas el coste de maná, tipo, texto de reglas, fuerza/resistencia ni
 
 Deriva la paleta de sus colores de maná: blanco=luz/orden, azul=agua/conocimiento, negro=sombra/decadencia, rojo=fuego/caos, verde=naturaleza/crecimiento, incoloro=metal/vacío; para multicolor crea una mezcla coherente. La composición será horizontal, apaisada 16:9 y apta para recorte art_crop. La imagen contendrá solo ilustración: nunca texto, letras, números, logos, marcos de carta ni símbolos de maná.
 
+Si recibes brief, contiene decisiones obligatorias del usuario. En especial, el estilo visual elegido define la técnica, el acabado y el tono tanto de full_prompt como de fallback_prompt.
+
 Si recibes assignment, representa exactamente ese elemento y nómbralo explícitamente en full_prompt, con sus rasgos canónicos: diseño, colores, vestuario, armas y escenario característicos de la franquicia, siguiendo visual_brief. Combina assignment con la mecánica de la carta y la ilustración original como referencia conceptual. fallback_prompt describe ese mismo elemento sin nombres propios, conservando sus rasgos visuales. themed_name debe partir del element asignado.
 
 Sigue el tema del usuario de forma literal y con máxima fidelidad. Si nombra franquicias, personajes, obras, estudios o artistas, úsalos por su nombre en full_prompt y describe con precisión sus rasgos característicos: diseño de personajes, vestuario, paleta, técnica y época.
@@ -37,10 +39,12 @@ def normalize_theme(theme: str) -> str:
     return " ".join(theme.lower().split())
 
 
-def make_cache_key(oracle_id, theme: str, provider: str, assignment=None) -> str:
+def make_cache_key(oracle_id, theme: str, provider: str, assignment=None, brief=None) -> str:
     value = f"{oracle_id}|{normalize_theme(theme)}|{PROMPT_VERSION}|{provider}"
     if assignment is not None:
         value += f"|{normalize_theme(assignment.element)}|{normalize_theme(assignment.visual_brief)}"
+    if brief:
+        value += "|brief:" + json.dumps(brief, sort_keys=True, ensure_ascii=False).lower()
     return hashlib.sha256(value.encode()).hexdigest()
 
 
@@ -67,7 +71,7 @@ def _clean_json(raw: str) -> dict:
     return result
 
 
-def build_visual_prompt(card, theme: str, assignment=None) -> dict:
+def build_visual_prompt(card, theme: str, assignment=None, brief=None) -> dict:
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     card_data = {
         "mana_cost": card.mana_cost, "power": card.power, "toughness": card.toughness,
@@ -78,6 +82,8 @@ def build_visual_prompt(card, theme: str, assignment=None) -> dict:
     }
     if assignment is not None:
         card_data["assignment"] = {key: getattr(assignment, key) for key in ("element", "category", "visual_brief")}
+    if brief:
+        card_data["brief"] = brief
     text_block = {"type": "text", "text": json.dumps(card_data, ensure_ascii=False)}
     content = [text_block]
     if card.original_art_url:

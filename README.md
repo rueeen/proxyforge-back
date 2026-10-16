@@ -252,3 +252,66 @@ Devuelve una lista `[{"symbol":"{R}","svg_uri":"https://svgs.scryfall.io/card-sy
 Los datos de Scryfall se cachean 7 días en `media/cache/symbology.json`. Si el servicio
 falla, se usa el caché vencido; sin caché responde 502. El frontend puede usar estos
 SVG para componer la capa de texto; debe tener acceso a `svgs.scryfall.io`.
+
+
+## Entrevista temática opcional
+
+Flujo recomendado: **importar → preguntas → respuestas → plan temático → tandas**.
+Puedes omitir la entrevista y seguir planificando y generando como antes.
+Claude prepara entre 0 y 5 preguntas a partir del comandante, identidad de color,
+tipos y cartas destacadas del mazo real; las preguntas no son una plantilla fija.
+Con un tema suficientemente preciso puede devolver cero preguntas.
+
+Generar preguntas (reemplaza las anteriores, vacía las respuestas y reinicia su fecha):
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/theme-questions/ \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+Cada pregunta tiene `id` (`q1`, `q2`, …), `question`, `help`, `multiple`,
+`allow_other` y de 2 a 4 opciones con `id` (`a`–`d`), `label` y `detail`.
+Lee esos ids del detalle antes de enviar las respuestas:
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/decks/1/theme-answers/ \
+  -H 'Content-Type: application/json' \
+  -d '{"answers":{"q1":{"option_ids":["a"],"other":""},"q3":{"option_ids":[],"other":"Estilo de las cinemáticas de Warcraft III"}}}'
+curl -X POST http://127.0.0.1:8000/api/decks/1/theme-plan/ \
+  -H 'Content-Type: application/json' -d '{"overwrite_edited":false}'
+curl -X POST http://127.0.0.1:8000/api/decks/1/generate/ \
+  -H 'Content-Type: application/json' -d '{"limit":2}'
+```
+
+El PUT reemplaza todas las respuestas; se pueden omitir preguntas o enviar
+`{"answers":{}}` para vaciarlas. Los ids de pregunta y opción deben existir.
+Cada respuesta necesita al menos una opción o texto `other` no vacío (máximo
+200 caracteres y solo si `allow_other` es true). `multiple:false` admite como
+máximo una opción. Un error de validación devuelve 400 con `{"answers":["mensaje"]}`.
+Ambos endpoints devuelven el detalle del mazo y responden 409 ante un job activo;
+la generación de preguntas responde 502 con `detail` si Claude falla.
+
+Todas las respuestas de detalle incluyen:
+
+```json
+{
+  "theme_questions": [
+    {"id":"q1","question":"¿Quién representa al comandante?","help":"Sacrificio negro-rojo","multiple":false,"allow_other":true,"options":[{"id":"a","label":"Arthas","detail":"No-muertos"},{"id":"b","label":"Gul’dan","detail":"Magia vil"}]}
+  ],
+  "theme_answers": {"q1":{"option_ids":["a"],"other":""}},
+  "theme_brief": [{"question":"¿Quién representa al comandante?","answer":"Arthas"}],
+  "theme_plan_stale": false
+}
+```
+
+El brief une los labels elegidos con coma y agrega `Otra: …` para el texto libre.
+El planner y los prompts de cada carta lo tratan como decisiones obligatorias,
+incluidos protagonista, facción, época, tierras y estilo visual. Se conservan las
+asignaciones editadas al rehacer el plan salvo `overwrite_edited:true`.
+
+Al cambiar las respuestas, las imágenes del brief anterior dejan de contar como
+cacheadas. `theme_plan_stale:true` indica que hay un plan completo y las respuestas
+son posteriores a la asignación no editada más reciente: vuelve a generar el plan
+antes de la siguiente tanda. Si no hay asignaciones no editadas, el indicador es
+false. El prompt sigue en v3: con brief vacío las claves de caché permanecen iguales
+a las de los mazos que no usan entrevista.

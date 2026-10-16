@@ -34,6 +34,9 @@ class Deck(models.Model):
     name = models.CharField(max_length=200)
     raw_list = models.TextField()
     theme = models.TextField()
+    theme_questions = models.JSONField(default=list, blank=True)
+    theme_answers = models.JSONField(default=dict, blank=True)
+    theme_answers_updated_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
