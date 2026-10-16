@@ -34,25 +34,64 @@ def _unique_cards(deck):
     return cards
 
 
+def _image_extension(image_bytes):
+    with Image.open(BytesIO(image_bytes)) as image:
+        extension = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}.get(image.format)
+        if extension is None:
+            raise ValueError("Formato de imagen no compatible")
+        image.verify()
+    return extension
+
+
+def render_card_image(card, theme, provider) -> tuple[dict, bytes]:
+    """Llama a Claude y al proveedor; no toca la base de datos."""
+    prompt_json = build_visual_prompt(card, theme)
+    try:
+        image_bytes = provider.generate(prompt_json["full_prompt"])
+        _image_extension(image_bytes)
+    except Exception as full_error:
+        logger.warning("Falló full_prompt para %s: %s; intentando fallback_prompt", card.name, full_error)
+        try:
+            image_bytes = provider.generate(prompt_json["fallback_prompt"])
+            _image_extension(image_bytes)
+        except Exception as fallback_error:
+            raise RuntimeError(
+                f"Falló full_prompt: {full_error}. Falló fallback_prompt: {fallback_error}"
+            ) from fallback_error
+        prompt_json["used_prompt"] = "fallback"
+    else:
+        prompt_json["used_prompt"] = "full"
+    return prompt_json, image_bytes
+
+
+def save_card_image(card, theme, provider, prompt_json, image_bytes) -> GeneratedImage:
+    """Detecta formato, guarda el archivo con nombre único y crea el registro."""
+    extension = _image_extension(image_bytes)
+    cache_key = make_cache_key(card.oracle_id, theme, provider.name)
+    prompt_key = "fallback_prompt" if prompt_json["used_prompt"] == "fallback" else "full_prompt"
+    generated = GeneratedImage(
+        cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json[prompt_key],
+        prompt_json=prompt_json, provider=provider.name, prompt_version=PROMPT_VERSION,
+    )
+    generated.image.save(
+        f"{cache_key[:16]}-{uuid4().hex}.{extension}", ContentFile(image_bytes), save=False
+    )
+    try:
+        generated.save()
+    except Exception:
+        generated.image.delete(save=False)
+        raise
+    return generated
+
+
 def generate_card_image(card, theme, provider=None):
     provider = provider or get_provider()
     cache_key = make_cache_key(card.oracle_id, theme, provider.name)
     existing = GeneratedImage.objects.filter(cache_key=cache_key).first()
     if existing:
         return existing
-    prompt_json = build_visual_prompt(card, theme)
-    image_bytes = provider.generate(prompt_json["full_prompt"])
-    generated = GeneratedImage(
-        cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json["full_prompt"],
-        prompt_json=prompt_json, provider=provider.name, prompt_version=PROMPT_VERSION,
-    )
-    with Image.open(BytesIO(image_bytes)) as image:
-        ext = {"PNG": "png", "JPEG": "jpg", "WEBP": "webp"}.get(image.format)
-    if ext is None:
-        raise ValueError("Formato de imagen no compatible")
-    generated.image.save(f"{cache_key[:16]}-{uuid4().hex[:8]}.{ext}", ContentFile(image_bytes), save=False)
-    generated.save()
-    return generated
+    prompt_json, image_bytes = render_card_image(card, theme, provider)
+    return save_card_image(card, theme, provider, prompt_json, image_bytes)
 
 
 def run_job(job_id):

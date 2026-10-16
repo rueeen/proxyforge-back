@@ -9,12 +9,12 @@ from anthropic import Anthropic, APIStatusError
 logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "v2"
-EXPECTED_FIELDS = {"subject", "action", "setting", "palette", "style_notes", "composition", "full_prompt", "concept_source", "themed_name", "themed_flavor", "frame_style"}
+EXPECTED_FIELDS = {"subject", "action", "setting", "palette", "style_notes", "composition", "full_prompt", "fallback_prompt", "concept_source", "themed_name", "themed_flavor", "frame_style"}
 SYSTEM_PROMPT = """Actúa como director de arte. Traduce los datos de una carta de Magic: The Gathering a una descripción visual original dentro del tema pedido. Conserva siempre su flavor mecánico: una remoción muestra destrucción, un buff potenciación y un contrahechizo interrupción.
 
-Responde únicamente JSON válido, sin preámbulo ni bloques Markdown, con exactamente estas claves: subject, action, setting, palette (lista de tres colores hex), style_notes, composition, full_prompt (un solo párrafo listo para un generador de imágenes), concept_source, themed_name, themed_flavor y frame_style.
+Responde únicamente JSON válido, sin preámbulo ni bloques Markdown, con exactamente estas claves: subject, action, setting, palette (lista de tres colores hex), style_notes, composition, full_prompt (un solo párrafo listo para un generador de imágenes), fallback_prompt, concept_source, themed_name, themed_flavor y frame_style.
 
-Si recibes la ilustración original, describe primero en concept_source qué concepto representa: sujeto, acción, emoción y relación con la mecánica. Luego reinterpreta ese concepto dentro del tema. No copies la composición exacta ni imites el estilo del artista original: toma la idea, no la imagen.
+Si recibes la ilustración original, describe primero en concept_source qué concepto representa: sujeto, acción, emoción y relación con la mecánica. Luego reinterpreta ese concepto dentro del tema.
 
 themed_name es un nombre alternativo en español de 30 caracteres o menos, coherente con el tema y reconocible respecto del original. themed_flavor es flavor text en español de 140 caracteres o menos, ambientado en el tema y sin comillas envolventes.
 
@@ -24,7 +24,11 @@ Nunca reescribas el coste de maná, tipo, texto de reglas, fuerza/resistencia ni
 
 Deriva la paleta de sus colores de maná: blanco=luz/orden, azul=agua/conocimiento, negro=sombra/decadencia, rojo=fuego/caos, verde=naturaleza/crecimiento, incoloro=metal/vacío; para multicolor crea una mezcla coherente. La composición será horizontal, apaisada 16:9 y apta para recorte art_crop. La imagen contendrá solo ilustración: nunca texto, letras, números, logos, marcos de carta ni símbolos de maná.
 
-No nombres franquicias, marcas registradas ni personajes protegidos, aunque el tema los pida. Traduce esas referencias a rasgos estéticos genéricos; por ejemplo, «Megaman» pasa a «robots azules retro-futuristas, ciencia ficción japonesa de los 80 y cel shading de colores planos»."""
+Sigue el tema del usuario de forma literal y con máxima fidelidad. Si nombra franquicias, personajes, obras, estudios o artistas, úsalos por su nombre en full_prompt y describe con precisión sus rasgos característicos: diseño de personajes, vestuario, paleta, técnica y época.
+
+Con la ilustración original puedes conservar su composición, encuadre o pose si eso sirve al tema. Puedes también reinterpretarla por completo; decide lo que dé el mejor resultado. Si el tema pide el estilo de un artista concreto, incluido el artista original de la carta, aplícalo.
+
+fallback_prompt describe la misma escena que full_prompt, con el mismo nivel de detalle, pero sin nombres propios de franquicias, personajes, marcas ni artistas. Reemplaza cada nombre por una descripción visual precisa de sus rasgos para conservar el resultado buscado. Se usa solo si el proveedor de imágenes rechaza el prompt original. Si full_prompt no contiene nombres propios, fallback_prompt puede ser idéntico."""
 
 
 def normalize_theme(theme: str) -> str:
@@ -44,6 +48,8 @@ def _clean_json(raw: str) -> dict:
     missing = EXPECTED_FIELDS - result.keys() if isinstance(result, dict) else EXPECTED_FIELDS
     if missing:
         raise ValueError(f"Faltan campos JSON: {', '.join(sorted(missing))}")
+    if not isinstance(result["fallback_prompt"], str) or not result["fallback_prompt"].strip():
+        raise ValueError("fallback_prompt debe ser texto no vacío")
     frame = result["frame_style"]
     if not isinstance(frame, dict) or not {"border", "background", "text_box", "accent", "texture"} <= frame.keys():
         raise ValueError("frame_style incompleto")
