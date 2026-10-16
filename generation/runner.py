@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
-from .providers import get_provider
+from .providers import get_fallback_provider, get_provider
 
 logger = logging.getLogger(__name__)
 
@@ -46,22 +46,26 @@ def _image_extension(image_bytes):
 def render_card_image(card, theme, provider) -> tuple[dict, bytes]:
     """Llama a Claude y al proveedor; no toca la base de datos."""
     prompt_json = build_visual_prompt(card, theme)
-    try:
-        image_bytes = provider.generate(prompt_json["full_prompt"])
-        _image_extension(image_bytes)
-    except Exception as full_error:
-        logger.warning("Falló full_prompt para %s: %s; intentando fallback_prompt", card.name, full_error)
+    fallback_provider = get_fallback_provider()
+    attempts = [(provider, "full"), (provider, "fallback")]
+    if fallback_provider is not None:
+        attempts.append((fallback_provider, "fallback"))
+    failures = []
+    last_error = None
+    for attempt_provider, prompt_type in attempts:
         try:
-            image_bytes = provider.generate(prompt_json["fallback_prompt"])
+            image_bytes = attempt_provider.generate(prompt_json[f"{prompt_type}_prompt"])
             _image_extension(image_bytes)
-        except Exception as fallback_error:
-            raise RuntimeError(
-                f"Falló full_prompt: {full_error}. Falló fallback_prompt: {fallback_error}"
-            ) from fallback_error
-        prompt_json["used_prompt"] = "fallback"
-    else:
-        prompt_json["used_prompt"] = "full"
-    return prompt_json, image_bytes
+        except Exception as error:
+            reason = f"{attempt_provider.name}/{prompt_type}: {error}"
+            logger.warning("Falló la generación: %s", reason)
+            failures.append(reason)
+            last_error = error
+        else:
+            prompt_json["used_prompt"] = prompt_type
+            prompt_json["used_provider"] = attempt_provider.name
+            return prompt_json, image_bytes
+    raise RuntimeError("; ".join(failures)) from last_error
 
 
 def save_card_image(card, theme, provider, prompt_json, image_bytes) -> GeneratedImage:
@@ -71,7 +75,7 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes) -> Generate
     prompt_key = "fallback_prompt" if prompt_json["used_prompt"] == "fallback" else "full_prompt"
     generated = GeneratedImage(
         cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json[prompt_key],
-        prompt_json=prompt_json, provider=provider.name, prompt_version=PROMPT_VERSION,
+        prompt_json=prompt_json, provider=prompt_json["used_provider"], prompt_version=PROMPT_VERSION,
     )
     generated.image.save(
         f"{cache_key[:16]}-{uuid4().hex}.{extension}", ContentFile(image_bytes), save=False
