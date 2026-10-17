@@ -143,6 +143,38 @@ def _reference_candidates(assignment, wiki, target, existing):
     return candidates, avoided
 
 
+def _save_auto_references(assignment, normalized_images, urls, verdicts, target):
+    """Persist accepted normalized (bytes, sha256) pairs in the verification order."""
+    saved = []
+    try:
+        with transaction.atomic():
+            current = ThemeAssignment.objects.select_for_update().get(pk=assignment.pk)
+            existing = list(current.references.all())
+            remaining = min(target, max(0, 3 - len(existing)))
+            hashes = {item.sha256 for item in existing}
+            position = max((item.position for item in existing), default=-1) + 1
+            order = getattr(verdicts, 'best_order', list(range(len(normalized_images))))
+            for index in order:
+                if len(saved) >= remaining:
+                    break
+                image, digest = normalized_images[index]
+                if not verdicts[index][0] or digest in hashes:
+                    continue
+                reference = ReferenceImage(assignment=current, origin='auto', source_url=urls[index],
+                                           sha256=digest, position=position)
+                reference.image.save(f'{uuid4().hex}.jpg', ContentFile(image), save=False)
+                saved.append(reference)
+                reference.save()
+                hashes.add(digest)
+                position += 1
+    except Exception:
+        for reference in saved:
+            reference.image.delete(save=False)
+        raise
+    getattr(assignment, '_prefetched_objects_cache', {}).pop('references', None)
+    return saved
+
+
 def fetch_auto_reference(assignment, force=False):
     references = list(assignment.references.all())
     has_url = any(value.lower().startswith(('http://', 'https://', '//')) for value in
@@ -190,29 +222,15 @@ def fetch_auto_reference(assignment, force=False):
         if not accepted:
             return _status(assignment, 'rejected', verdicts[0][1])
         with transaction.atomic():
-            current = ThemeAssignment.objects.select_for_update().get(pk=assignment.pk)
-            existing = list(current.references.all())
-            if any(item.origin == 'auto' for item in existing):
-                return _result('skipped', 'Ya hay una referencia automática.', 'already_has_auto_reference')
-            hashes = {item.sha256 for item in existing}
-            position = max((item.position for item in existing), default=-1) + 1
-            for index in accepted[:max(0, 3 - len(existing))]:
-                image, digest, url, _ = candidates[index]
-                if digest in hashes:
-                    continue
-                reference = ReferenceImage(assignment=current, origin='auto', source_url=url, sha256=digest, position=position)
-                reference.image.save(f'{uuid4().hex}.jpg', ContentFile(image), save=False)
-                saved.append(reference)
-                reference.save()
-                hashes.add(digest)
-                position += 1
+            saved = _save_auto_references(assignment, [(item[0], item[1]) for item in candidates],
+                                          [item[2] for item in candidates], verdicts, target)
+            selected_hashes = {item.sha256 for item in saved}
+            selected = [item[3] for item in candidates if item[1] in selected_hashes]
             message = f'Se agregaron {len(saved)} referencias'
-            if avoided and any(not candidates[index][3]['maybe_fan_art'] for index in accepted) and not any(
-                    candidates[index][3].get('is_page_image') and candidates[index][3]['maybe_fan_art'] for index in accepted):
+            if avoided and any(not image['maybe_fan_art'] for image in selected) and not any(
+                    image.get('is_page_image') and image['maybe_fan_art'] for image in selected):
                 message += '; se evitó la principal (posible fan art)'
-            result = _status(assignment, 'found', message)
-        getattr(assignment, '_prefetched_objects_cache', {}).pop('references', None)
-        return result
+            return _status(assignment, 'found', message)
     except WikiImageNotFound as exc:
         return _status(assignment, 'not_found', str(exc) or 'No se encontró una imagen de referencia.')
     except WikiDownloadBlocked as exc:

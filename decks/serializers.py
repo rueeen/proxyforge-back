@@ -94,7 +94,7 @@ class DeckDetailSerializer(serializers.ModelSerializer):
         model = Deck
         fields = ["id", "name", "raw_list", "theme", "card_layout", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
                   "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale", "auto_reference_counts",
-                  "reference_wiki", "reference_wiki_alt", "reference_wiki_confirmed", "wiki_candidates", "auto_reference_count"]
+                  "reference_wiki", "reference_wiki_alt", "reference_wiki_confirmed", "wiki_candidates", "auto_reference_count", "image_resolution"]
 
 
 class DeckListSerializer(serializers.ModelSerializer):
@@ -131,12 +131,12 @@ def deck_detail_context(deck, request, brief=None):
 class DeckLayoutSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError("Envía card_layout o auto_reference_count.")
+            raise serializers.ValidationError("Envía card_layout, auto_reference_count o image_resolution.")
         return attrs
 
     auto_reference_count = serializers.IntegerField(min_value=1, max_value=3, required=False)
 
     class Meta:
         model = Deck
-        fields = ["card_layout", "auto_reference_count"]
+        fields = ["card_layout", "auto_reference_count", "image_resolution"]
         extra_kwargs = {"card_layout": {"required": False}}

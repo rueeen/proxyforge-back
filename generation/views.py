@@ -1,4 +1,5 @@
 import os
+import json
 import math
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from .wiki_sites import probe_wiki, normalize_domain, verify_assignment_pages
 from .wiki_discovery import discover_wikis
 from .wiki_images import (normalize_wiki_reference, list_wiki_images, reference_page_url,
                           wiki_file_image, _download, WikiDownloadBlocked, WikiImageError, WikiImageNotFound)
-from .auto_references import fetch_auto_reference, reference_assignments
+from .auto_references import fetch_auto_reference, reference_assignments, verify_references, _save_auto_references
 from .jobs import expire_stale_jobs
 
 from .models import GeneratedImage, GenerationJob, ThemeAssignment, ReferenceImage
@@ -76,7 +77,7 @@ class RegenerateCardView(APIView):
         try:
             provider = get_provider()
             key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief, deck_card.deck.card_layout, reference_hashes(assignment))
-            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief, deck_card.deck.card_layout)
+            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief, deck_card.deck.card_layout, resolution=deck_card.deck.image_resolution)
             with transaction.atomic():
                 old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
                 old_file = old.image if old else None
@@ -97,6 +98,8 @@ class DeckEstimateView(APIView):
         to_generate = len(pending)
         price = Decimal(os.getenv("COST_PER_IMAGE_USD", "0.04"))
         reference_price = Decimal(os.getenv("COST_PER_REFERENCE_USD", "0.01"))
+        if deck.image_resolution == "2k":
+            price += Decimal(os.getenv("COST_2K_EXTRA_USD", "0.02"))
         assignments = assignment_map(deck)
         costs = []
         reference_cost = Decimal('0')
@@ -337,7 +340,8 @@ class CardFramingView(APIView):
             return Response({'detail': 'La carta no tiene arte generado.'}, status=404)
         values = {'framing_source': 'manual'}
         for field, target, lower, upper in (
-            ('offset_y', 'framing_offset_y', -20, 35), ('zoom', 'framing_zoom', 70, 160),
+            ('offset_x', 'framing_offset_x', -60, 60), ('offset_y', 'framing_offset_y', -60, 60),
+            ('zoom', 'framing_zoom', 50, 300),
         ):
             if field in request.data:
                 value = request.data[field]
@@ -524,3 +528,100 @@ class ReferenceWikiView(APIView):
         deck.reference_wiki_confirmed = False
         deck.save(update_fields=['reference_wiki_confirmed'])
         return self._response(deck)
+
+
+class BrowserReferencesView(AssignmentReferencesView):
+    http_method_names = ['post', 'options']
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, card_id):
+        entry = self._entry(card_id)
+        if self._active(entry):
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        assignment = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first() if entry.card_id else None
+        if assignment is None:
+            return Response({'detail': 'Primero define o genera el plan temático de esta carta.'}, status=400)
+        mode = request.data.get('mode')
+        files = request.FILES.getlist('files')
+        if mode not in ('pick', 'auto'):
+            return Response({'detail': 'mode debe ser pick o auto.'}, status=400)
+        if not 1 <= len(files) <= 6:
+            return Response({'detail': 'Envía entre 1 y 6 archivos en files.'}, status=400)
+        existing = list(assignment.references.all())
+        protected = [item for item in existing if item.origin != 'auto']
+        target = min(entry.deck.auto_reference_count, 3 - len(protected))
+        if (mode == 'pick' and len(existing) >= 3) or (mode == 'auto' and target <= 0):
+            return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+        source_urls = request.data.getlist('source_urls')
+        try:
+            if len(source_urls) == 1 and source_urls[0].lstrip().startswith('['):
+                source_urls = json.loads(source_urls[0])
+            if not source_urls:
+                source_urls = [''] * len(files)
+            if not isinstance(source_urls, list) or len(source_urls) != len(files):
+                raise ValueError('source_urls debe ser una lista alineada con files.')
+            url_field = serializers.URLField(max_length=1000, allow_blank=True)
+            if any(not isinstance(url, str) for url in source_urls):
+                raise ValueError('URL de origen inválida.')
+            source_urls = [url_field.run_validation(url) for url in source_urls]
+            normalized = []
+            for file in files:
+                if file.size > MAX_REFERENCE_BYTES:
+                    raise ValueError('La imagen supera 10 MB')
+                normalized.append(normalize_reference(file.read(MAX_REFERENCE_BYTES + 1)))
+        except (ValueError, serializers.ValidationError) as exc:
+            message = 'URL de origen inválida.' if isinstance(exc, serializers.ValidationError) else str(exc)
+            return Response({'detail': message}, status=400)
+        if mode == 'pick':
+            image_bytes, digest = normalized[0]
+            reference = None
+            try:
+                with transaction.atomic():
+                    assignment = ThemeAssignment.objects.select_for_update().get(pk=assignment.pk)
+                    existing = list(assignment.references.all())
+                    if len(existing) >= 3:
+                        return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+                    if any(item.sha256 == digest for item in existing):
+                        return Response({'detail': 'Esa imagen ya está agregada.'}, status=400)
+                    reference = ReferenceImage(assignment=assignment, origin='wiki', source_url=source_urls[0],
+                        sha256=digest, position=max((item.position for item in existing), default=-1) + 1)
+                    reference.image.save(f'{uuid4().hex}.jpg', ContentFile(image_bytes), save=False)
+                    reference.save()
+                    assignment.edited = True
+                    assignment.auto_reference_status = 'found'
+                    assignment.auto_reference_message = 'Elegida desde el navegador'
+                    assignment.save(update_fields=['edited', 'auto_reference_status', 'auto_reference_message', 'updated_at'])
+            except Exception:
+                if reference is not None and reference.image:
+                    reference.image.delete(save=False)
+                raise
+        else:
+            images, urls = [], []
+            hashes = {item.sha256 for item in protected}
+            for image, url in zip(normalized, source_urls):
+                if image[1] not in hashes:
+                    hashes.add(image[1])
+                    images.append(image)
+                    urls.append(url)
+            if not images:
+                return Response({'detail': 'Esa imagen ya está agregada.'}, status=400)
+            verdicts = verify_references([item[0] for item in images], assignment)
+            saved = []
+            try:
+                with transaction.atomic():
+                    assignment = ThemeAssignment.objects.select_for_update().get(pk=assignment.pk)
+                    current_protected = assignment.references.exclude(origin='auto').count()
+                    target = min(entry.deck.auto_reference_count, 3 - current_protected)
+                    if target <= 0:
+                        return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+                    assignment.references.filter(origin='auto').delete()
+                    saved = _save_auto_references(assignment, images, urls, verdicts, target)
+                    assignment.auto_reference_status = 'found' if saved else 'rejected'
+                    assignment.auto_reference_message = (f'Se agregaron {len(saved)} referencias (descargadas por el navegador)'
+                                                         if saved else verdicts[0][1])[:300]
+                    assignment.save(update_fields=['auto_reference_status', 'auto_reference_message', 'updated_at'])
+            except Exception:
+                for reference in saved:
+                    reference.image.delete(save=False)
+                raise
+        return self._response(entry, status=201)

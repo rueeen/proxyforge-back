@@ -120,9 +120,9 @@ class ProviderAttemptTests(SimpleTestCase):
         self.assertEqual(prompt["used_provider"], "gemini")
         self.assertEqual(prompt["used_prompt"], "fallback")
         self.assertEqual(order.mock_calls, [
-            call.primary(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[]),
-            call.primary(valid_prompt()["fallback_prompt"], aspect_ratio="16:9", references=[]),
-            call.backup(valid_prompt()["fallback_prompt"], aspect_ratio="16:9", references=[]),
+            call.primary(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[], resolution=None),
+            call.primary(valid_prompt()["fallback_prompt"], aspect_ratio="16:9", references=[], resolution=None),
+            call.backup(valid_prompt()["fallback_prompt"], aspect_ratio="16:9", references=[], resolution=None),
         ])
         self.assertEqual(len(logs.output), 2)
         self.assertIn("grok/full: policy", logs.output[0])

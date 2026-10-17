@@ -259,7 +259,7 @@ class BackgroundRunnerTests(TestCase):
             current = GenerationJob.objects.get(pk=job.pk)
             self.assertEqual((current.stage, current.total_cards, current.completed_cards), ('Planificando lote 2 de 3', 1, 0))
         build.side_effect = plan
-        def generated(*args):
+        def generated(*args, **kwargs):
             self.assertEqual(GenerationJob.objects.get(pk=job.pk).stage, 'Generando Tree (1 de 1)')
         generate.side_effect = generated
         run_job(job.pk)

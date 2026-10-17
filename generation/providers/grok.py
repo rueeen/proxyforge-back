@@ -11,18 +11,18 @@ from .base import ImageProvider, validate_aspect_ratio
 class GrokProvider(ImageProvider):
     name = "grok"
 
-    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None) -> bytes:
+    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None, resolution=None) -> bytes:
         validate_aspect_ratio(aspect_ratio)
         api_key = os.getenv("XAI_API_KEY")
         if not api_key or not api_key.strip():
             raise RuntimeError("Falta XAI_API_KEY")
         if references:
-            return self._edit(prompt, aspect_ratio, references, api_key)
+            return self._edit(prompt, aspect_ratio, references, api_key, resolution)
         client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         model = os.getenv("XAI_IMAGE_MODEL", "grok-imagine-image-2.0")
         extra_body = {
             "aspect_ratio": aspect_ratio,
-            "resolution": os.getenv("XAI_IMAGE_RESOLUTION", "1k"),
+            "resolution": resolution or os.getenv("XAI_IMAGE_RESOLUTION", "1k"),
         }
         if model.startswith("grok-imagine-image-2"):
             extra_body["quality"] = os.getenv("XAI_IMAGE_QUALITY", "medium")
@@ -37,10 +37,11 @@ class GrokProvider(ImageProvider):
         return base64.b64decode(image.b64_json, validate=True)
 
 
-    def _edit(self, prompt, aspect_ratio, references, api_key):
+    def _edit(self, prompt, aspect_ratio, references, api_key, resolution=None):
         model = os.getenv("XAI_EDIT_MODEL", "grok-imagine-image-2.0")
         payload = {
             "model": model, "prompt": prompt, "aspect_ratio": aspect_ratio, "response_format": "b64_json",
+            "resolution": resolution or os.getenv("XAI_IMAGE_RESOLUTION", "1k"),
             "images": [{"type": "image_url", "url": "data:image/jpeg;base64," + base64.b64encode(ref).decode()}
                        for ref in references],
         }
