@@ -16,6 +16,7 @@ from rest_framework.views import APIView
 from decks.models import Deck, DeckCard
 from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_detail_context
 from .errors import short_error
+from .auto_references import fetch_auto_reference, fetch_auto_references
 from .jobs import expire_stale_jobs
 
 from .models import GeneratedImage, GenerationJob, ThemeAssignment, ReferenceImage
@@ -125,8 +126,19 @@ class ThemeAssignmentView(APIView):
             return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
         serializer = ThemeAssignmentInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        ThemeAssignment.objects.update_or_create(deck=entry.deck, oracle_id=entry.card.oracle_id,
-                                                defaults={**serializer.validated_data, "edited": True})
+        with transaction.atomic():
+            assignment, _ = ThemeAssignment.objects.get_or_create(deck=entry.deck, oracle_id=entry.card.oracle_id,
+                                                                  defaults=serializer.validated_data)
+            changed = any(field in serializer.validated_data and serializer.validated_data[field] != getattr(assignment, field)
+                          for field in ("reference_wiki", "reference_page"))
+            if changed:
+                assignment.auto_reference_status = ''
+                assignment.auto_reference_message = ''
+                assignment.references.filter(origin='auto').delete()
+            for field, value in serializer.validated_data.items():
+                setattr(assignment, field, value)
+            assignment.edited = True
+            assignment.save()
         context = deck_detail_context(entry.deck, request)
         return Response(DeckCardSerializer(entry, context=context).data)
 
@@ -240,3 +252,35 @@ class AssignmentReferencesView(APIView):
             return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
         reference.delete()
         return self._response(entry)
+
+
+class AutoReferencesView(APIView):
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=['pending', 'running']).exists():
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        force = request.data.get('force', False)
+        ids = request.data.get('deck_card_ids')
+        if type(force) is not bool or (ids is not None and (not isinstance(ids, list) or
+                any(type(value) is not int or value < 1 for value in ids))):
+            return Response({'detail': 'force debe ser booleano y deck_card_ids una lista de ids.'}, status=400)
+        summary = fetch_auto_references(deck, deck_card_ids=ids, force=force)
+        data = DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data
+        return Response({**data, 'auto_reference_summary': summary})
+
+
+class AutoReferenceView(APIView):
+    def post(self, request, card_id):
+        entry = get_object_or_404(DeckCard.objects.select_related('card', 'deck'), pk=card_id)
+        expire_stale_jobs(entry.deck)
+        if entry.deck.jobs.filter(status__in=['pending', 'running']).exists():
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        assignment = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first() if entry.card_id else None
+        if assignment is None or not assignment.reference_wiki or not assignment.reference_page:
+            return Response({'detail': 'Define una asignación con reference_wiki y reference_page.'}, status=400)
+        force = request.data.get('force', True)
+        if type(force) is not bool:
+            return Response({'detail': 'force debe ser booleano.'}, status=400)
+        fetch_auto_reference(assignment, force=force)
+        return Response(DeckCardSerializer(entry, context=deck_detail_context(entry.deck, request)).data)

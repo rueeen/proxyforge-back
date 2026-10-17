@@ -35,6 +35,9 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `IMAGE_PROVIDER` | Principal: `gemini` (predeterminado), `openai` o `grok`. |
 | `IMAGE_FALLBACK_PROVIDER` | Respaldo opcional: `gemini`, `openai` o `grok`; vacío o igual al principal lo desactiva. |
 | `XAI_API_KEY` | Clave de xAI para Grok Imagine. |
+| `AUTO_REFERENCE_VERIFY` | Verifica las referencias automáticas con Claude; predeterminado `true`. |
+| `ANTHROPIC_VERIFY_MODEL` | Modelo opcional de verificación; vacío usa `ANTHROPIC_MODEL`. |
+| `AUTO_REFERENCES_IN_JOBS` | Busca referencias pendientes antes de generar cada carta; predeterminado `true`. |
 | `XAI_EDIT_MODEL` | Modelo para edición con referencias; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_MODEL` | Modelo de Grok; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_RESOLUTION` | Resolución de Grok: `1k` (predeterminado) o `2k`. |
@@ -393,7 +396,7 @@ El POST devuelve 201 y el DELETE 200, ambos con el DeckCard actualizado.
 `theme_assignment.references` contiene objetos como:
 
 ```json
-[{"id":4,"image_url":"http://127.0.0.1:8000/media/references/archivo.jpg","source_url":"https://example.com/voljin.jpg"}]
+[{"id":4,"image_url":"http://127.0.0.1:8000/media/references/archivo.jpg","source_url":"https://example.com/voljin.jpg","origin":"manual"}]
 ```
 
 La subida requiere una asignación y rechaza imágenes duplicadas, más de tres
@@ -420,3 +423,83 @@ lo registra en logs y genera solo desde texto. El runner pasa las mismas referen
 en orden de posición, al intento completo, al fallback y al proveedor de respaldo.
 El prompt pide conservar identidad, rostro, especie y equipo característico, creando
 una composición nueva en el formato clásico o sin borde seleccionado.
+
+
+## Referencias automáticas desde wikis
+
+El plan temático marca con `needs_reference:true` los personajes, jefes, objetos o
+lugares icónicos cuyo parecido visual importa, e indica `reference_wiki` (dominio)
+y `reference_page` (título de página). Los conceptos, enemigos genéricos y temas
+puramente estéticos no necesitan estas referencias.
+
+Flujo completo: **importar → entrevista opcional → plan → buscar referencias →
+tandas**. Puedes buscar todas las referencias pendientes o limitarte a entradas
+DeckCard del mazo:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/auto-references/ \
+  -H 'Content-Type: application/json' -d '{"force":false,"deck_card_ids":[12,13]}'
+curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/auto-reference/ \
+  -H 'Content-Type: application/json' -d '{"force":true}'
+```
+
+El endpoint del mazo devuelve su detalle más
+`auto_reference_summary: {"found":0,"not_found":0,"rejected":0,"error":0,"skipped":0}`.
+Omitir `deck_card_ids` procesa todas las asignaciones; una lista vacía no procesa
+ninguna. El endpoint por carta devuelve el DeckCard y usa `force:true` por defecto;
+responde 400 si faltan asignación, wiki o página. Ambos son síncronos y responden
+409 si hay un job activo. `force` reintenta estados anteriores, pero no reemplaza
+referencias existentes, sean manuales o automáticas.
+
+Puedes corregir la wiki o página desde el PATCH de asignación:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/cards/12/theme-assignment/ \
+  -H 'Content-Type: application/json' \
+  -d '{"element":"Vol\u0027jin","category":"Troll","visual_brief":"Vol\u0027jin al mando de sus tropas","needs_reference":true,"reference_wiki":"warcraft.wiki.gg","reference_page":"Vol\u0027jin"}'
+```
+
+En JSON, `\u0027` representa el apóstrofo. El dominio debe estar en minúsculas, sin
+esquema ni rutas. Cambiar wiki o página limpia el estado del intento y elimina
+solo las referencias automáticas. Si el planner cambia el elemento, también limpia
+el estado y las automáticas. Las referencias manuales se conservan; las asignaciones
+editadas siguen protegidas salvo `overwrite_edited:true`.
+
+Cada `theme_assignment` expone `needs_reference`, `reference_wiki`, `reference_page`,
+`auto_reference_status` y `auto_reference_message`. Los estados son `""` (sin intentar),
+`found`, `not_found`, `rejected` y `error`. Cada referencia incluye `origin:"manual"`
+o `origin:"auto"`. El detalle del mazo agrega, sin consultas por carta:
+
+```json
+{"auto_reference_counts":{"needed":18,"with_reference":12,"pending":6}}
+```
+
+`needed` cuenta las asignaciones que necesitan referencia; `with_reference`, las que
+ya tienen alguna; `pending`, las que no tienen referencias ni un intento previo.
+Se guarda como máximo una automática por asignación y se omiten las que ya tienen
+cualquier referencia. La carga automática no marca la asignación como editada.
+
+El cliente detecta `/api.php` o `/w/api.php`, consulta primero la imagen principal,
+busca el título si la página no existe y, como último recurso, inspecciona sus
+archivos excluyendo logos, iconos, mapas, SVG y GIF. Pausa al menos 0,3 segundos
+entre peticiones al mismo dominio y valida tipo de imagen y límite de 10 MB.
+Las imágenes pasan por la misma normalización JPEG que las referencias manuales.
+
+`AUTO_REFERENCE_VERIFY=true` verifica que la imagen identifique claramente al sujeto,
+con `ANTHROPIC_VERIFY_MODEL` o el modelo habitual si está vacío. Un rechazo visual
+queda como `rejected`; un fallo técnico de Claude acepta la imagen sin verificar.
+Con `AUTO_REFERENCES_IN_JOBS=true`, cada carta intenta buscar su referencia pendiente
+antes de generar y calcular su caché. Una búsqueda fallida no bloquea la ilustración.
+
+Diagnóstico local de una wiki:
+
+```bash
+python manage.py find_reference "Vol'jin" --wiki warcraft.wiki.gg --verify
+```
+
+Imprime la ruta de API, el paso que encontró la imagen, su URL y dimensiones, y
+opcionalmente la verificación de Claude. Guarda el JPEG normalizado en
+`media/cache/find_reference/<slug>.jpg`. Fandom, wiki.gg y otras wikis MediaWiki usan
+este flujo, aunque algunas pueden bloquear peticiones automatizadas. Las imágenes
+se descargan **solo para uso local como referencia**; `media/references/` está ignorada
+y no se sube al repositorio, salvo su `.gitkeep` vacío.
