@@ -94,7 +94,7 @@ class FallbackProviderTests(SimpleTestCase):
             get_fallback_provider()
 
 
-@patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
+@patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
 class ProviderAttemptTests(SimpleTestCase):
     def setUp(self):
         self.card = SimpleNamespace(name="Tree")
@@ -120,9 +120,9 @@ class ProviderAttemptTests(SimpleTestCase):
         self.assertEqual(prompt["used_provider"], "gemini")
         self.assertEqual(prompt["used_prompt"], "fallback")
         self.assertEqual(order.mock_calls, [
-            call.primary(valid_prompt()["full_prompt"], aspect_ratio="16:9"),
-            call.primary(valid_prompt()["fallback_prompt"], aspect_ratio="16:9"),
-            call.backup(valid_prompt()["fallback_prompt"], aspect_ratio="16:9"),
+            call.primary(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[]),
+            call.primary(valid_prompt()["fallback_prompt"], aspect_ratio="16:9", references=[]),
+            call.backup(valid_prompt()["fallback_prompt"], aspect_ratio="16:9", references=[]),
         ])
         self.assertEqual(len(logs.output), 2)
         self.assertIn("grok/full: policy", logs.output[0])

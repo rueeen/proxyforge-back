@@ -29,6 +29,8 @@ Nunca reescribas el coste de maná, tipo, texto de reglas, fuerza/resistencia ni
 
 Deriva la paleta de sus colores de maná: blanco=luz/orden, azul=agua/conocimiento, negro=sombra/decadencia, rojo=fuego/caos, verde=naturaleza/crecimiento, incoloro=metal/vacío; para multicolor crea una mezcla coherente. La composición será horizontal, apaisada 16:9 y apta para recorte art_crop. La imagen contendrá solo ilustración: nunca texto, letras, números, logos, marcos de carta ni símbolos de maná.
 
+Si reference_images es mayor que 0, el generador recibirá esas imágenes como referencia de identidad del personaje o elemento asignado. Escribe full_prompt en inglés comenzando con: «Use the character shown in the reference image(s) as the exact identity reference: keep their face, species, proportions, hairstyle, colors, outfit and signature gear. Create a NEW illustration (do not copy the reference composition or pose):» y continúa con la escena. fallback_prompt sigue la misma estructura, pero sin nombres propios. Respeta las reglas de composición del formato.
+
 Cuando el sujeto sea un personaje, criatura o raza de una franquicia, describe en full_prompt y fallback_prompt los rasgos anatómicos que lo distinguen de especies parecidas con las que un generador de imágenes podría confundirlo, y nómbralos en contraste cuando exista riesgo real. Troll de Warcraft (no orco): alto y delgado, postura encorvada, orejas largas y puntiagudas, colmillos largos curvados hacia arriba, nariz larga, dos dedos grandes en los pies, cresta de pelo, piel azul o verde según la tribu. Orco de Warcraft (no troll): corpulento, mandíbula ancha, colmillos inferiores cortos, orejas pequeñas. Elfo de sangre (no elfo de la noche): piel clara, ojos verdes brillantes. Elfo de la noche: piel violeta o azul, ojos plateados sin pupila. Hazlo también para variantes del mismo personaje en distintas épocas, por ejemplo Arthas príncipe vs. Rey Exánime.
 
 Si recibes brief, contiene decisiones obligatorias del usuario. En especial, el estilo visual elegido define la técnica, el acabado y el tono tanto de full_prompt como de fallback_prompt.
@@ -50,7 +52,7 @@ def normalize_theme(theme: str) -> str:
     return " ".join(theme.lower().split())
 
 
-def make_cache_key(oracle_id, theme: str, provider: str, assignment=None, brief=None, layout=None) -> str:
+def make_cache_key(oracle_id, theme: str, provider: str, assignment=None, brief=None, layout=None, reference_hashes=None) -> str:
     value = f"{oracle_id}|{normalize_theme(theme)}|{PROMPT_VERSION}|{provider}"
     if assignment is not None:
         value += f"|{normalize_theme(assignment.element)}|{normalize_theme(assignment.visual_brief)}"
@@ -58,6 +60,8 @@ def make_cache_key(oracle_id, theme: str, provider: str, assignment=None, brief=
         value += "|brief:" + json.dumps(brief, sort_keys=True, ensure_ascii=False).lower()
     if layout == "borderless":
         value += "|layout:borderless"
+    if reference_hashes:
+        value += "|refs:" + ",".join(sorted(reference_hashes))
     return hashlib.sha256(value.encode()).hexdigest()
 
 
@@ -84,7 +88,7 @@ def _validate_prompt(result):
     return result
 
 
-def build_visual_prompt(card, theme: str, assignment=None, brief=None, layout="classic") -> dict:
+def build_visual_prompt(card, theme: str, assignment=None, brief=None, layout="classic", reference_count=0) -> dict:
     card_data = {
         "layout": layout,
         "mana_cost": card.mana_cost, "power": card.power, "toughness": card.toughness,
@@ -97,6 +101,8 @@ def build_visual_prompt(card, theme: str, assignment=None, brief=None, layout="c
         card_data["assignment"] = {key: getattr(assignment, key) for key in ("element", "category", "visual_brief")}
     if brief:
         card_data["brief"] = brief
+    if reference_count > 0:
+        card_data["reference_images"] = reference_count
     text_block = {"type": "text", "text": json.dumps(card_data, ensure_ascii=False)}
     content = [text_block]
     if card.original_art_url:

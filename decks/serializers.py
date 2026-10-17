@@ -2,6 +2,8 @@ from django.db.models import prefetch_related_objects
 from rest_framework import serializers
 
 from generation.prompt_builder import make_cache_key
+from generation.references import reference_hashes
+from generation.serializers import ReferenceImageSerializer
 from generation.models import GeneratedImage
 from generation.selection import assignment_map
 from generation.theme_interview import deck_brief
@@ -30,7 +32,10 @@ class DeckCardSerializer(serializers.ModelSerializer):
 
     def get_theme_assignment(self, obj):
         assignment = self.context.get("assignments", {}).get(obj.card.oracle_id) if obj.card_id else None
-        return {key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited")} if assignment else None
+        if assignment is None:
+            return None
+        return {**{key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited")},
+                "references": ReferenceImageSerializer(assignment.references.all(), many=True, context=self.context).data}
 
     class Meta:
         model = DeckCard
@@ -39,7 +44,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
     def get_generated_image(self, obj):
         if not obj.card_id:
             return None
-        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"), obj.deck.card_layout)
+        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"), obj.deck.card_layout, reference_hashes(self.context.get("assignments", {}).get(obj.card.oracle_id)))
         generated = self.context.get("generated_images", {}).get(key)
         if not generated:
             return None
@@ -101,7 +106,7 @@ def deck_detail_context(deck, request, brief=None):
     assignments = assignment_map(deck)
     if brief is None:
         brief = deck_brief(deck)
-    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id), brief, deck.card_layout)
+    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id), brief, deck.card_layout, reference_hashes(assignments.get(entry.card.oracle_id)))
             for entry in deck.cards.all() if entry.card_id]
     return {
         "request": request,

@@ -1,10 +1,15 @@
 import os
+from uuid import uuid4
+
+import requests
+from django.core.files.base import ContentFile
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
-from rest_framework import status
+from rest_framework import status, serializers
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -13,11 +18,12 @@ from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_det
 from .errors import short_error
 from .jobs import expire_stale_jobs
 
-from .models import GeneratedImage, GenerationJob, ThemeAssignment
+from .models import GeneratedImage, GenerationJob, ThemeAssignment, ReferenceImage
 from .selection import batch_limit, pending_entries, assignment_map
 from .theme_planner import build_theme_plan
 from .theme_interview import build_theme_questions, deck_brief, validate_theme_answers
 from .prompt_builder import make_cache_key
+from .references import reference_hashes, normalize_reference, MAX_REFERENCE_BYTES
 from .providers import get_provider
 from .runner import render_card_image, save_card_image, start_job
 from .serializers import GenerationJobSerializer, ThemeAssignmentInputSerializer
@@ -61,7 +67,7 @@ class RegenerateCardView(APIView):
         theme = deck_card.deck.theme
         try:
             provider = get_provider()
-            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief, deck_card.deck.card_layout)
+            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief, deck_card.deck.card_layout, reference_hashes(assignment))
             prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief, deck_card.deck.card_layout)
             with transaction.atomic():
                 old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
@@ -156,3 +162,81 @@ class ThemeAnswersView(APIView):
         deck.theme_answers_updated_at = timezone.now()
         deck.save(update_fields=["theme_answers", "theme_answers_updated_at"])
         return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
+
+
+class AssignmentReferencesView(APIView):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def _entry(self, card_id):
+        return get_object_or_404(DeckCard.objects.select_related('card', 'deck'), pk=card_id)
+
+    def _active(self, entry):
+        expire_stale_jobs(entry.deck)
+        return entry.deck.jobs.filter(status__in=['pending', 'running']).exists()
+
+    def _response(self, entry, status=200):
+        return Response(DeckCardSerializer(entry, context=deck_detail_context(entry.deck, self.request)).data, status=status)
+
+    def post(self, request, card_id):
+        entry = self._entry(card_id)
+        if self._active(entry):
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        assignment = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first() if entry.card_id else None
+        if assignment is None:
+            return Response({'detail': 'Primero define o genera el plan temático de esta carta.'}, status=400)
+        if assignment.references.count() >= 3:
+            return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+        if not hasattr(request.data, 'get') or len(request.FILES.getlist('file')) > 1:
+            return Response({'detail': 'Envía un archivo o una URL de imagen.'}, status=400)
+        file = request.FILES.get('file')
+        url = request.data.get('url')
+        if bool(file) == bool(url):
+            return Response({'detail': 'Envía un archivo o una URL de imagen.'}, status=400)
+        source_url = ''
+        try:
+            if file:
+                raw = file.read(MAX_REFERENCE_BYTES + 1)
+            else:
+                try:
+                    source_url = serializers.URLField(max_length=1000).run_validation(url)
+                except serializers.ValidationError:
+                    return Response({'detail': 'URL de imagen inválida.'}, status=400)
+                response = requests.get(source_url, timeout=20, headers={'User-Agent': 'ProxyForge/1.0'})
+                response.raise_for_status()
+                if not response.headers.get('Content-Type', '').lower().startswith('image/'):
+                    return Response({'detail': 'La URL no devuelve una imagen.'}, status=400)
+                raw = response.content
+            image_bytes, digest = normalize_reference(raw)
+        except requests.RequestException:
+            return Response({'detail': 'No se pudo descargar la imagen de referencia.'}, status=400)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        reference = None
+        try:
+            with transaction.atomic():
+                assignment = ThemeAssignment.objects.select_for_update().get(pk=assignment.pk)
+                existing = list(assignment.references.all())
+                if len(existing) >= 3:
+                    return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+                if any(item.sha256 == digest for item in existing):
+                    return Response({'detail': 'Esa imagen ya está agregada.'}, status=400)
+                reference = ReferenceImage(assignment=assignment, source_url=source_url, sha256=digest,
+                                           position=max((item.position for item in existing), default=-1) + 1)
+                reference.image.save(f'{uuid4().hex}.jpg', ContentFile(image_bytes), save=False)
+                reference.save()
+                assignment.edited = True
+                assignment.save(update_fields=['edited', 'updated_at'])
+        except Exception:
+            if reference is not None and reference.image:
+                reference.image.delete(save=False)
+            raise
+        return self._response(entry, status=201)
+
+    def delete(self, request, card_id, reference_id):
+        entry = self._entry(card_id)
+        reference = get_object_or_404(ReferenceImage, pk=reference_id, assignment__deck=entry.deck,
+                                      assignment__oracle_id=entry.card.oracle_id if entry.card_id else None)
+        if self._active(entry):
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        reference.delete()
+        return self._response(entry)

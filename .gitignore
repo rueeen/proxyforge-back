@@ -6,3 +6,5 @@ db.sqlite3
 media/generated/*
 !media/generated/.gitkeep
 media/cache/
+media/references/*
+!media/references/.gitkeep

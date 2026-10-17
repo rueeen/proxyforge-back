@@ -119,8 +119,8 @@ class ProviderLayoutTests(SimpleTestCase):
             result, _ = render_card_image(card, 'theme', primary, layout='borderless')
         self.assertEqual(primary.generate.call_count, 2)
         self.assertTrue(all(call.kwargs['aspect_ratio'] == '3:4' for call in primary.generate.call_args_list))
-        backup.generate.assert_called_once_with(valid_prompt()['fallback_prompt'], aspect_ratio='3:4')
-        build.assert_called_once_with(card, 'theme', None, None, 'borderless')
+        backup.generate.assert_called_once_with(valid_prompt()['fallback_prompt'], aspect_ratio='3:4', references=[])
+        build.assert_called_once_with(card, 'theme', None, None, 'borderless', reference_count=0)
         self.assertEqual(result['used_provider'], 'gemini')
 
 
@@ -210,7 +210,7 @@ class DeckLayoutTests(TestCase):
         with tempfile.TemporaryDirectory() as media, self.settings(MEDIA_ROOT=media):
             image = generate_card_image(self.card, 'theme', provider, layout='borderless')
             self.assertEqual(image.cache_key, make_cache_key(self.card.oracle_id, 'theme', 'gemini', layout='borderless'))
-            provider.generate.assert_called_once_with(valid_prompt()['full_prompt'], aspect_ratio='3:4')
+            provider.generate.assert_called_once_with(valid_prompt()['full_prompt'], aspect_ratio='3:4', references=[])
             self.deck.card_layout = 'borderless'
             self.deck.save()
             self.assertIsNotNone(self.client.get(self.url).json()['cards'][0]['generated_image'])
@@ -224,7 +224,7 @@ class LayoutMigrationTests(TransactionTestCase):
     def test_existing_decks_classic_and_new_decks_borderless(self):
         before = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'),
                   ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
-        after = [('decks', '0005_deck_card_layout'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
+        after = [('decks', '0005_deck_card_layout'), ('generation', '0004_referenceimage')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:

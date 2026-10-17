@@ -267,13 +267,14 @@ class InterviewTests(TestCase):
 
     def test_detail_query_count_with_brief(self):
         self.save_answers({'q1': {'option_ids': ['a']}})
+        ThemeAssignment.objects.create(deck=self.deck, oracle_id=self.card.oracle_id, element='Element', category='', visual_brief='Brief')
         url = f'/api/decks/{self.deck.id}/'
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             self.client.get(url)
         for _ in range(15):
             card = self.add_card()
             ThemeAssignment.objects.create(deck=self.deck, oracle_id=card.oracle_id, element='Element', category='', visual_brief='Brief')
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             self.client.get(url)
 
     @patch('generation.runner.connection.close')
@@ -304,7 +305,7 @@ class InterviewTests(TestCase):
         self.assertEqual(save.call_args.args[6], brief)
         self.assertIsNotNone(result.json()['generated_image'])
 
-    @patch('generation.runner.build_visual_prompt', side_effect=lambda *args: valid_prompt())
+    @patch('generation.runner.build_visual_prompt', side_effect=lambda *args, **kwargs: valid_prompt())
     def test_saved_image_uses_brief_and_cache_hit(self, build):
         import tempfile
         with tempfile.TemporaryDirectory() as media, self.settings(MEDIA_ROOT=media):
@@ -316,7 +317,7 @@ class InterviewTests(TestCase):
             provider.generate.return_value = stream.getvalue()
             image = generate_card_image(self.card, self.deck.theme, provider, brief=brief)
             self.assertEqual(image.cache_key, make_cache_key(self.card.oracle_id, self.deck.theme, 'gemini', brief=brief))
-            build.assert_called_once_with(self.card, self.deck.theme, None, brief, 'classic')
+            build.assert_called_once_with(self.card, self.deck.theme, None, brief, 'classic', reference_count=0)
             with patch('generation.runner.render_card_image') as render:
                 self.assertEqual(generate_card_image(self.card, self.deck.theme, provider, brief=brief).pk, image.pk)
             render.assert_not_called()

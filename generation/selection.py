@@ -3,6 +3,7 @@ import os
 from django.db.models import Case, IntegerField, Value, When
 
 from .models import GeneratedImage
+from .references import reference_hashes
 from .prompt_builder import make_cache_key
 from .providers import get_provider_name
 
@@ -23,7 +24,7 @@ def unique_entries(deck):
 
 
 def assignment_map(deck):
-    return {assignment.oracle_id: assignment for assignment in deck.theme_assignments.all()}
+    return {assignment.oracle_id: assignment for assignment in deck.theme_assignments.prefetch_related("references").all()}
 
 
 def pending_entries(deck):
@@ -33,7 +34,7 @@ def pending_entries(deck):
     entries = unique_entries(deck)
     assignments = assignment_map(deck)
     keys = {row.card.oracle_id: make_cache_key(row.card.oracle_id, deck.theme, get_provider_name(),
-                                             assignments.get(row.card.oracle_id), brief, deck.card_layout) for row in entries}
+                                             assignments.get(row.card.oracle_id), brief, deck.card_layout, reference_hashes(assignments.get(row.card.oracle_id))) for row in entries}
     cached = set(GeneratedImage.objects.filter(cache_key__in=keys.values()).values_list('cache_key', flat=True))
     return entries, [row for row in entries if keys[row.card.oracle_id] not in cached]
 
