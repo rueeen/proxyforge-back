@@ -9,10 +9,11 @@ from .models import ThemeAssignment
 from .prompt_builder import normalize_theme
 from .selection import unique_entries
 from .theme_interview import deck_brief
-from .wiki_images import valid_wiki
+from .wiki_images import normalize_wiki_reference
 
 SYSTEM_PROMPT = """Planifica un mazo de Magic dentro del tema solicitado. Usa referencias canónicas y específicas: personajes, enemigos, jefes, armas, ítems, vehículos, lugares, escenarios y eventos reales de la franquicia. Prefiere variedad y profundidad, no solo protagonistas.
 Asigna según función: comandante y criaturas legendarias a personajes principales o icónicos; criaturas según color, coste, fuerza/resistencia y habilidades (grandes y caras: jefes; baratas: enemigos comunes); equipos y armas a armas, mejoras o power-ups (armas de jefes o partes de armadura); vehículos a monturas o vehículos como Ride Armor; otros artefactos a ítems, tecnología y dispositivos como Sub Tank o Heart Tank; tierras a lugares y escenarios distintos para cada tipo de básica; instantáneos y conjuros a ataques, técnicas o momentos de historia; encantamientos a estados, poderes, tecnologías o fenómenos persistentes; planeswalkers a personajes clave con poder de mando.
+element se escribe con el nombre canónico en inglés de la franquicia, tal como aparece en su wiki oficial o comunitaria en inglés (Vol'jin, Sylvanas Windrunner, Frostmourne, Undercity). category y visual_brief van en español. reference.page debe ser el título exacto en inglés de la página en esa wiki; nunca lo traduzcas.
 Verifica la facción, tribu y raza canónicas de cada personaje antes de asignarlo (por ejemplo, Zul'jin es un troll Amani, no Gurubashi). Si dudas, prefiere una descripción que no afirme un dato incorrecto.
 El elemento debe encajar con la mecánica: remoción es ataque destructivo, contrahechizo es interrupción, robo de cartas es inteligencia o información. No repitas element entre cartas ni elementos ya usados. Si faltan elementos, varía escena, momento o aspecto (Zero — Z-Saber, primer plano; Zero — dash aéreo).
 Si el tema es una estética, asigna sujetos concretos y variados con la misma lógica. visual_brief debe describir en máximo 40 palabras y 1-3 frases qué se ve, qué hace y dónde: Storm Eagle en picada sobre la cubierta de la aeronave, soltando ráfagas que arrastran a un Reploid.
@@ -54,11 +55,13 @@ def build_theme_plan(deck, overwrite_edited=False, brief=None):
                     continue
                 results[key] = {field: item[field].strip() for field in ('element', 'category', 'visual_brief')}
                 reference = item.get('reference')
-                valid = (isinstance(reference, dict) and valid_wiki(reference.get('wiki'))
-                         and isinstance(reference.get('page'), str) and bool(reference['page'].strip())
-                         and len(reference['page']) <= 300)
-                results[key].update(needs_reference=bool(valid), reference_wiki=reference['wiki'] if valid else '',
-                                    reference_page=reference['page'].strip() if valid else '')
+                wiki = page = ''
+                if isinstance(reference, dict):
+                    try:
+                        wiki, page = normalize_wiki_reference(reference.get('wiki'), reference.get('page'))
+                    except ValueError:
+                        pass
+                results[key].update(needs_reference=bool(wiki and page), reference_wiki=wiki, reference_page=page)
                 used.add(element)
                 used_elements.append(item['element'])
         pending = [row for row in pending if row.card.oracle_id not in results]

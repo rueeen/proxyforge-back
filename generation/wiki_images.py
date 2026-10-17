@@ -1,7 +1,7 @@
 import re
 import threading
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
 
@@ -25,6 +25,35 @@ class WikiImageError(Exception):
 
 def valid_wiki(wiki):
     return isinstance(wiki, str) and len(wiki) <= 200 and re.fullmatch(WIKI_PATTERN, wiki) is not None
+
+
+def normalize_wiki_reference(wiki, page):
+    if not isinstance(wiki, str) or not isinstance(page, str):
+        raise ValueError('Dominio de wiki inválido. Ejemplo: warcraft.wiki.gg')
+    domain = wiki.strip()
+    title = page.strip()
+    # A URL in the page field takes precedence over one in the domain field.
+    for value in (wiki.strip(), page.strip()):
+        if value.lower().startswith(('http://', 'https://', '//')):
+            try:
+                parsed = urlparse(value)
+                domain = parsed.hostname or ''
+            except ValueError as exc:
+                raise ValueError('Dominio de wiki inválido. Ejemplo: warcraft.wiki.gg') from exc
+            candidate = parse_qs(parsed.query).get('title', [''])[0]
+            if not candidate and '/wiki/' in parsed.path:
+                candidate = parsed.path.split('/wiki/', 1)[1].rstrip('/')
+            if candidate:
+                title = candidate
+    domain = domain.lower().split('/', 1)[0]
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    if not valid_wiki(domain):
+        raise ValueError('Dominio de wiki inválido. Ejemplo: warcraft.wiki.gg')
+    title = ' '.join(unquote(title).split('#', 1)[0].replace('_', ' ').split())
+    if not title or len(title) > 300:
+        raise ValueError('Página de wiki inválida: usa un título de hasta 300 caracteres.')
+    return domain, title
 
 
 def _get(url, timeout, accept=None, **kwargs):
@@ -97,8 +126,12 @@ def _download(url):
 
 
 def find_wiki_image(wiki, page):
-    if not valid_wiki(wiki) or not isinstance(page, str) or not page.strip() or len(page) > 300:
-        raise WikiImageError('Dominio o página de wiki inválidos')
+    try:
+        wiki, page = normalize_wiki_reference(wiki, page)
+    except ValueError as exc:
+        raise WikiImageError(str(exc)) from exc
+    LAST_RESULTS.pop((wiki, page), None)
+    searched = False
     info, url = _principal(wiki, page)
     step = 1
     title = info.get('title') or page
@@ -106,7 +139,8 @@ def find_wiki_image(wiki, page):
         search = _query(wiki, action='query', list='search', srsearch=page, srlimit=1, srnamespace=0)
         results = search.get('query', {}).get('search') or []
         if not results:
-            raise WikiImageNotFound('Página no encontrada')
+            raise WikiImageNotFound(f'No existe la página "{page}" en {wiki} y la búsqueda no encontró resultados')
+        searched = True
         title = results[0]['title']
         info, url = _principal(wiki, title)
         title = info.get('title') or title
@@ -127,7 +161,8 @@ def find_wiki_image(wiki, page):
                 url = images[0].get('thumburl') or images[0].get('url')
                 step = 3
     if not url:
-        raise WikiImageNotFound('No se encontró una imagen de la página')
+        raise WikiImageNotFound(f'La página "{title}" no tiene imagen utilizable')
     raw = _download(url)
-    LAST_RESULTS[(wiki, page)] = {'api': API_PATHS[wiki], 'step': step, 'url': url}
+    LAST_RESULTS[(wiki, page)] = {'api': API_PATHS[wiki], 'step': step, 'url': url,
+                                  'matched_title': title if searched and title != page else ''}
     return raw, url
