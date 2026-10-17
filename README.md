@@ -35,6 +35,7 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `IMAGE_PROVIDER` | Principal: `gemini` (predeterminado), `openai` o `grok`. |
 | `IMAGE_FALLBACK_PROVIDER` | Respaldo opcional: `gemini`, `openai` o `grok`; vacío o igual al principal lo desactiva. |
 | `XAI_API_KEY` | Clave de xAI para Grok Imagine. |
+| `AUTO_FRAMING` | Auto-encuadre de imágenes nuevas sin borde; predeterminado `true`. Usa visión con `ANTHROPIC_VERIFY_MODEL` o `ANTHROPIC_MODEL`. |
 | `AUTO_REFERENCE_VERIFY` | Verifica las referencias automáticas con Claude; predeterminado `true`. |
 | `ANTHROPIC_VERIFY_MODEL` | Modelo opcional de verificación; vacío usa `ANTHROPIC_MODEL`. |
 | `AUTO_REFERENCES_IN_JOBS` | Busca referencias pendientes antes de generar cada carta; predeterminado `true`. |
@@ -341,7 +342,7 @@ caracteres. El contrato de la API, PROMPT_VERSION v3 y las claves de caché se m
 ## Formato de carta: sin borde o clásico
 
 Los mazos nuevos usan `card_layout:"borderless"` por defecto: ilustración vertical
-3:4 a sangre completa, con el sujeto entre el 12% y el 60% del alto. El 10% superior
+3:4 a sangre completa, con el rostro entre el 20% y el 45% del alto y nunca en el 15% superior. El 10% superior
 y el 40% inferior dejan espacio visual para las placas translúcidas del frontend;
 la imagen generada sigue sin incluir texto ni marcos. Los prompts describen los
 rasgos anatómicos y variantes de época de cada especie para evitar confusiones
@@ -503,3 +504,55 @@ opcionalmente la verificación de Claude. Guarda el JPEG normalizado en
 este flujo, aunque algunas pueden bloquear peticiones automatizadas. Las imágenes
 se descargan **solo para uso local como referencia**; `media/references/` está ignorada
 y no se sube al repositorio, salvo su `.gitkeep` vacío.
+
+
+## Encuadre manual y automático del arte
+
+Las imágenes nuevas sin borde piden más aire sobre la cabeza, incluidos casco,
+corona, cuernos o armas alzadas. Claude debe terminar los prompts de imagen en inglés
+con una instrucción explícita de composición vertical, franja superior libre y 40%
+inferior más tranquilo para superponer texto. PROMPT_VERSION sigue en v3 y las
+imágenes ya cacheadas se conservan.
+
+Cada `generated_image` del DeckCard incluye:
+
+```json
+{"framing_offset_y":22.0,"framing_zoom":100.0,"framing_source":"auto","face_center_y":0.1}
+```
+
+`framing_offset_y` desplaza la imagen verticalmente en porcentaje del alto de la
+carta (positivo hacia abajo), entre −20 y +35. `framing_zoom` va de 70 a 160, con 100
+como tamaño cover normal. `framing_source` es `default`, `auto` o `manual`.
+`face_center_y` es la posición detectada en la imagen original, entre 0 y 1, o null.
+El frontend aplica las transformaciones CSS y rellena los huecos con una copia
+difuminada de la misma imagen; el backend conserva el archivo de arte original.
+
+Ajustar una imagen actual, con ambos campos opcionales:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/cards/12/framing/ \
+  -H 'Content-Type: application/json' -d '{"offset_y":12.5,"zoom":105}'
+curl -X POST http://127.0.0.1:8000/api/cards/12/framing/auto/
+curl -X POST http://127.0.0.1:8000/api/decks/1/framing/auto/
+```
+
+El PATCH recorta los números a sus límites, marca `manual` y devuelve el DeckCard.
+Un valor no numérico devuelve 400; si la entrada no tiene arte actual, los endpoints
+por carta devuelven 404 con `{"detail":"La carta no tiene arte generado."}`.
+El POST por carta recalcula incluso un ajuste manual; sin rostro restaura `(0,100)`
+y `default`. El POST por mazo omite los ajustes manuales, procesa cada imagen actual
+una sola vez y devuelve el detalle más
+`framing_summary: {"adjusted":0,"unchanged":0,"no_face":0}`. Un job activo devuelve 409.
+
+Con `AUTO_FRAMING=true`, después de guardar una imagen nueva borderless se realiza
+una llamada corta a Claude con visión (200 tokens, modelo `ANTHROPIC_VERIFY_MODEL`
+o `ANTHROPIC_MODEL` si el primero está vacío). La copia enviada es JPEG con lado
+mayor de 768 px. Las imágenes clásicas mantienen el encuadre por defecto y no usan
+esta llamada. Un error de detección o persistencia del encuadre no elimina el arte.
+
+Si el rostro está por encima del 26% del alto, el auto-encuadre lo desplaza hacia el
+32%, con zoom 100 y tope +35; si está al 26% o más, no desplaza la imagen. Por ejemplo,
+un rostro al 10% recibe +22 y uno al 0% recibe +32. El zoom 90 queda como respaldo
+para posiciones defensivas fuera de rango que aún no alcancen la zona segura con
+el desplazamiento máximo. Al regenerar, la imagen nueva recibe su propio encuadre,
+sin heredar el manual anterior. Estos valores no cambian la clave de caché.

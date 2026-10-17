@@ -1,4 +1,5 @@
 import os
+import math
 from uuid import uuid4
 
 import requests
@@ -16,6 +17,7 @@ from rest_framework.views import APIView
 from decks.models import Deck, DeckCard
 from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_detail_context
 from .errors import short_error
+from .framing import apply_auto_framing
 from .auto_references import fetch_auto_reference, fetch_auto_references
 from .jobs import expire_stale_jobs
 
@@ -25,7 +27,7 @@ from .theme_planner import build_theme_plan
 from .theme_interview import build_theme_questions, deck_brief, validate_theme_answers
 from .prompt_builder import make_cache_key
 from .references import reference_hashes, normalize_reference, MAX_REFERENCE_BYTES
-from .providers import get_provider
+from .providers import get_provider, get_provider_name
 from .runner import render_card_image, save_card_image, start_job
 from .serializers import GenerationJobSerializer, ThemeAssignmentInputSerializer
 
@@ -284,3 +286,61 @@ class AutoReferenceView(APIView):
             return Response({'detail': 'force debe ser booleano.'}, status=400)
         fetch_auto_reference(assignment, force=force)
         return Response(DeckCardSerializer(entry, context=deck_detail_context(entry.deck, request)).data)
+
+
+def _framing_card(card_id, request):
+    entry = get_object_or_404(DeckCard.objects.select_related('card', 'deck'), pk=card_id)
+    context = deck_detail_context(entry.deck, request)
+    image = None
+    if entry.card_id:
+        assignment = context['assignments'].get(entry.card.oracle_id)
+        key = make_cache_key(entry.card.oracle_id, entry.deck.theme, get_provider_name(), assignment,
+                             context['brief'], entry.deck.card_layout, reference_hashes(assignment))
+        image = context['generated_images'].get(key)
+    return entry, context, image
+
+
+class CardFramingView(APIView):
+    http_method_names = ['patch', 'options']
+
+    def patch(self, request, card_id):
+        entry, context, image = _framing_card(card_id, request)
+        if image is None:
+            return Response({'detail': 'La carta no tiene arte generado.'}, status=404)
+        values = {'framing_source': 'manual'}
+        for field, target, lower, upper in (
+            ('offset_y', 'framing_offset_y', -20, 35), ('zoom', 'framing_zoom', 70, 160),
+        ):
+            if field in request.data:
+                value = request.data[field]
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    return Response({field: ['Debe ser un valor numérico finito.']}, status=400)
+                values[target] = max(lower, min(upper, value))
+        GeneratedImage.objects.filter(pk=image.pk).update(**values)
+        for field, value in values.items():
+            setattr(image, field, value)
+        return Response(DeckCardSerializer(entry, context=context).data)
+
+
+class CardAutoFramingView(APIView):
+    def post(self, request, card_id):
+        entry, context, image = _framing_card(card_id, request)
+        if image is None:
+            return Response({'detail': 'La carta no tiene arte generado.'}, status=404)
+        apply_auto_framing(image, entry.deck.card_layout)
+        return Response(DeckCardSerializer(entry, context=context).data)
+
+
+class DeckAutoFramingView(APIView):
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=['pending', 'running']).exists():
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        context = deck_detail_context(deck, request)
+        summary = dict(adjusted=0, unchanged=0, no_face=0)
+        for image in context['generated_images'].values():
+            if image.framing_source != 'manual':
+                summary[apply_auto_framing(image, deck.card_layout)] += 1
+        data = DeckDetailSerializer(deck, context=context).data
+        return Response({**data, 'framing_summary': summary})

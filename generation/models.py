@@ -23,6 +23,10 @@ class GenerationJob(models.Model):
 
 
 class GeneratedImage(models.Model):
+    framing_offset_y = models.FloatField(default=0)
+    framing_zoom = models.FloatField(default=100)
+    framing_source = models.CharField(max_length=10, choices=[("default", "Por defecto"), ("auto", "Automático"), ("manual", "Manual")], default="default")
+    face_center_y = models.FloatField(null=True, blank=True)
     cache_key = models.CharField(max_length=64, unique=True, db_index=True)
     card = models.ForeignKey(Card, on_delete=models.CASCADE)
     theme = models.TextField()
