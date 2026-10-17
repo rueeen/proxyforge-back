@@ -25,7 +25,7 @@ def assignment(card, element='Storm Eagle'):
 @patch.dict(os.environ, {'IMAGE_PROVIDER': 'gemini', 'MAX_CARDS_PER_JOB': '5', 'COST_PER_IMAGE_USD': '0.04'})
 class BatchAndPlanTests(TestCase):
     def setUp(self):
-        self.deck = Deck.objects.create(name='Deck', raw_list='', theme='Megaman X')
+        self.deck = Deck.objects.create(card_layout="classic", name='Deck', raw_list='', theme='Megaman X')
         self.entries = []
         for i, section in enumerate(['sideboard', 'main', 'commander', 'main', 'main', 'main', 'main', 'sideboard']):
             self.entries.append(DeckCard.objects.create(deck=self.deck, card=make_card(name=f'Card {i}'),

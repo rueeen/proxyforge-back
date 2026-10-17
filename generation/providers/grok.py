@@ -3,20 +3,21 @@ import os
 
 from openai import OpenAI
 
-from .base import ImageProvider
+from .base import ImageProvider, validate_aspect_ratio
 
 
 class GrokProvider(ImageProvider):
     name = "grok"
 
-    def generate(self, prompt: str) -> bytes:
+    def generate(self, prompt: str, aspect_ratio: str = "16:9") -> bytes:
+        validate_aspect_ratio(aspect_ratio)
         api_key = os.getenv("XAI_API_KEY")
         if not api_key or not api_key.strip():
             raise RuntimeError("Falta XAI_API_KEY")
         client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         model = os.getenv("XAI_IMAGE_MODEL", "grok-imagine-image-2.0")
         extra_body = {
-            "aspect_ratio": "16:9",
+            "aspect_ratio": aspect_ratio,
             "resolution": os.getenv("XAI_IMAGE_RESOLUTION", "1k"),
         }
         if model.startswith("grok-imagine-image-2"):

@@ -118,7 +118,7 @@ class ClaudeClientTests(SimpleTestCase):
 class PlannerBatchTests(TestCase):
     @patch('generation.claude_client.Anthropic')
     def test_sixty_five_cards_in_three_batches(self, anthropic):
-        deck = Deck.objects.create(name='Deck', raw_list='', theme='theme')
+        deck = Deck.objects.create(card_layout="classic", name='Deck', raw_list='', theme='theme')
         for i in range(65):
             card = make_card(name=f'Card {i}')
             DeckCard.objects.create(deck=deck, card=card, raw_name=card.name, quantity=1, section='main')
@@ -142,7 +142,7 @@ class PlannerBatchTests(TestCase):
 
 class ShortErrorTests(TestCase):
     def setUp(self):
-        self.deck = Deck.objects.create(name='Deck', raw_list='', theme='theme')
+        self.deck = Deck.objects.create(card_layout="classic", name='Deck', raw_list='', theme='theme')
         self.card = make_card()
         self.entry = DeckCard.objects.create(deck=self.deck, card=self.card, raw_name='Card', quantity=1, section='main')
         ThemeAssignment.objects.create(deck=self.deck, oracle_id=self.card.oracle_id, element='Element', category='', visual_brief='Brief')

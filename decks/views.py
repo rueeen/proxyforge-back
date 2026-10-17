@@ -6,10 +6,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from scryfall.client import resolve_cards
+from generation.jobs import expire_stale_jobs
 
 from .models import Deck, DeckCard
 from .parser import parse_decklist
-from .serializers import DeckCreateSerializer, DeckDetailSerializer, DeckListSerializer, deck_detail_context
+from .serializers import DeckCreateSerializer, DeckDetailSerializer, DeckListSerializer, DeckLayoutSerializer, deck_detail_context
 
 
 class DeckCollectionView(APIView):
@@ -40,6 +41,18 @@ class DeckCollectionView(APIView):
 class DeckDetailView(APIView):
     def get(self, request, deck_id):
         deck = get_object_or_404(Deck.objects.prefetch_related("cards__card"), pk=deck_id)
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
+
+    def patch(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        if not isinstance(request.data, dict) or set(request.data) - {"card_layout"}:
+            return Response({"detail": "Solo se puede modificar card_layout."}, status=400)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=["pending", "running"]).exists():
+            return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
+        serializer = DeckLayoutSerializer(deck, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
 
     def delete(self, request, deck_id):
