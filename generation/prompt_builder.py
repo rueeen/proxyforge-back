@@ -7,6 +7,7 @@ import re
 from anthropic import APIStatusError
 
 from .claude_client import call_claude_json, parse_json
+from .card_text import card_text_instructions
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +18,11 @@ SYSTEM_PROMPT = """Actúa como director de arte. Traduce los datos de una carta 
 Responde únicamente JSON válido, sin preámbulo ni bloques Markdown, con exactamente estas claves: subject, action, setting, palette (lista de tres colores hex), style_notes, composition, full_prompt (un solo párrafo listo para un generador de imágenes), fallback_prompt, concept_source, themed_name, themed_flavor y frame_style.
 
 Límites de extensión: concept_source máximo 60 palabras; subject 25; action 40; setting 40; style_notes 40; composition 40; full_prompt 150; fallback_prompt 150. themed_name máximo 30 caracteres y themed_flavor máximo 140 caracteres. Escribe concept_source primero en el JSON y sé breve en él: es contexto interno, no el prompt.
-full_prompt y fallback_prompt se escriben en inglés. Mantén los nombres propios de personajes, lugares y armas como en la franquicia. themed_name y themed_flavor siguen en español; los demás campos pueden quedar en español.
+full_prompt y fallback_prompt se escriben en inglés. Mantén los nombres propios de personajes, lugares y armas como en la franquicia. Los campos descriptivos internos pueden quedar en español.
 
 Si recibes la ilustración original, describe primero en concept_source qué concepto representa: sujeto, acción, emoción y relación con la mecánica. Luego reinterpreta ese concepto dentro del tema.
 
-themed_name es un nombre alternativo en español de 30 caracteres o menos, coherente con el tema y reconocible respecto del original. themed_flavor es flavor text en español de 140 caracteres o menos, ambientado en el tema y sin comillas envolventes.
+Respeta el idioma configurado para themed_name y themed_flavor según las instrucciones finales de este mensaje.
 
 frame_style es un objeto con border, background, text_box y accent (colores hex #RRGGBB), y texture (texto corto, como papel acuarela o metal cepillado). Deriva los colores del maná y del tema, con suficiente contraste para texto oscuro sobre text_box. Este objeto describe el marco que se compondrá aparte, no debe aparecer en la ilustración.
 
@@ -108,7 +109,8 @@ def build_visual_prompt(card, theme: str, assignment=None, brief=None, layout="c
     if card.original_art_url:
         content.insert(0, {"type": "image", "source": {"type": "url", "url": card.original_art_url}})
     messages = [{"role": "user", "content": content}]
-    kwargs = dict(system=SYSTEM_PROMPT.replace(CLASSIC_COMPOSITION, BORDERLESS_COMPOSITION) if layout == "borderless" else SYSTEM_PROMPT, max_tokens=int(os.getenv("ANTHROPIC_CARD_MAX_TOKENS", "4000")),
+    system = SYSTEM_PROMPT.replace(CLASSIC_COMPOSITION, BORDERLESS_COMPOSITION) if layout == "borderless" else SYSTEM_PROMPT
+    kwargs = dict(system=system + "\n\n" + card_text_instructions(), max_tokens=int(os.getenv("ANTHROPIC_CARD_MAX_TOKENS", "4000")),
                   validate=_validate_prompt)
     try:
         return call_claude_json(messages=messages, **kwargs)

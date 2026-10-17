@@ -1,8 +1,9 @@
 from django.urls import path
 
-from .views import CardFramingView, CardAutoFramingView, DeckAutoFramingView, AutoReferencesView, AutoReferenceView, AssignmentReferencesView, ThemeQuestionsView, ThemeAnswersView, ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
+from .views import RewriteTextsView, CardFramingView, CardAutoFramingView, DeckAutoFramingView, AutoReferencesView, AutoReferenceView, AssignmentReferencesView, ThemeQuestionsView, ThemeAnswersView, ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
 
 urlpatterns = [
+    path("decks/<int:deck_id>/rewrite-texts/", RewriteTextsView.as_view(), name="rewrite-texts"),
     path("cards/<int:card_id>/framing/", CardFramingView.as_view(), name="card-framing"),
     path("cards/<int:card_id>/framing/auto/", CardAutoFramingView.as_view(), name="card-auto-framing"),
     path("decks/<int:deck_id>/framing/auto/", DeckAutoFramingView.as_view(), name="deck-auto-framing"),

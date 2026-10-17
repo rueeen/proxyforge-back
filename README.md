@@ -27,6 +27,7 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `SECRET_KEY` | Clave de Django; cámbiala fuera del desarrollo local. |
 | `DEBUG` | Activa depuración y servicio local de archivos media. |
 | `ANTHROPIC_CARD_MAX_TOKENS` | Presupuesto de salida del prompt por carta; predeterminado `4000`. Si Claude corta la respuesta por largo, reintenta automáticamente una vez con el doble. |
+| `CARD_TEXT_LANGUAGE` | Idioma de nombre y flavor temáticos: `en` (default) o `es`; cualquier otro valor usa `en`. |
 | `ANTHROPIC_MODEL` | Modelo de Claude; predeterminado `claude-sonnet-4-6`. |
 | `STALE_JOB_MINUTES` | Expira jobs pending/running sin actualización; predeterminado `10` minutos. |
 | `ANTHROPIC_API_KEY` | Generación del prompt visual con Claude. |
@@ -326,8 +327,8 @@ a las de los mazos que no usan entrevista.
 ## Respuestas de Claude y límites de salida
 
 Los prompts por carta usan `ANTHROPIC_CARD_MAX_TOKENS=4000` y piden campos breves;
-`full_prompt` y `fallback_prompt` se escriben en inglés, mientras que nombre y flavor
-siguen en español. El planner procesa lotes de 30 cartas con 8000 tokens por lote,
+`full_prompt` y `fallback_prompt` se escriben en inglés; nombre y flavor usan
+`CARD_TEXT_LANGUAGE` (inglés por defecto). El planner procesa lotes de 30 cartas con 8000 tokens por lote,
 compartiendo los elementos ya usados. La entrevista dispone de 3000 tokens.
 
 Si Claude informa `stop_reason=max_tokens`, se reintenta automáticamente una vez con
@@ -449,8 +450,8 @@ El endpoint del mazo devuelve su detalle más
 Omitir `deck_card_ids` procesa todas las asignaciones; una lista vacía no procesa
 ninguna. El endpoint por carta devuelve el DeckCard y usa `force:true` por defecto;
 responde 400 si faltan asignación, wiki o página. Ambos son síncronos y responden
-409 si hay un job activo. `force` reintenta estados anteriores, pero no reemplaza
-referencias existentes, sean manuales o automáticas.
+409 si hay un job activo. `force:true` reemplaza la referencia automática anterior, incluido su archivo, y
+reintenta aunque needs_reference sea false. Conserva las referencias manuales.
 
 Puedes corregir la wiki o página desde el PATCH de asignación:
 
@@ -477,8 +478,8 @@ o `origin:"auto"`. El detalle del mazo agrega, sin consultas por carta:
 
 `needed` cuenta las asignaciones que necesitan referencia; `with_reference`, las que
 ya tienen alguna; `pending`, las que no tienen referencias ni un intento previo.
-Se guarda como máximo una automática por asignación y se omiten las que ya tienen
-cualquier referencia. La carga automática no marca la asignación como editada.
+Se guarda como máximo una automática por asignación, que puede coexistir con las
+manuales hasta el límite total de tres. La carga automática no marca la asignación como editada.
 
 El cliente detecta `/api.php` o `/w/api.php`, consulta primero la imagen principal,
 busca el título si la página no existe y, como último recurso, inspecciona sus
@@ -556,3 +557,63 @@ un rostro al 10% recibe +22 y uno al 0% recibe +32. El zoom 90 queda como respal
 para posiciones defensivas fuera de rango que aún no alcancen la zona segura con
 el desplazamiento máximo. Al regenerar, la imagen nueva recibe su propio encuadre,
 sin heredar el manual anterior. Estos valores no cambian la clave de caché.
+
+
+## Idioma de las cartas y reescritura sin regenerar arte
+
+`CARD_TEXT_LANGUAGE=en` genera `themed_name` y `themed_flavor` en inglés, con tono de
+Magic en inglés. `es` mantiene el español; cualquier otro valor usa inglés. Los
+nombres propios se conservan siempre en su forma canónica en inglés: Darkspear,
+Undercity, Arthas, the Lich King. Los planes nuevos o rehechos escriben `element`
+en inglés, `category` y `visual_brief` en español, y `reference.page` con el título
+exacto en inglés. La entrevista conserva preguntas y explicaciones en español, con
+nombres propios canónicos en las opciones.
+
+Para actualizar nombres y flavor ya generados sin volver a pagar por el arte:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/rewrite-texts/
+```
+
+Este endpoint síncrono usa solo texto, en lotes de 20 cartas y con 4000 tokens por
+llamada a Claude. Responde con el detalle más
+`rewrite_summary: {"updated":24,"skipped":1}`. Solo considera imágenes actuales;
+una carta omitida por Claude conserva sus textos y cuenta en skipped. Actualiza
+solo las dos claves de prompt_json, truncando a 30 y 140 caracteres. Conserva
+archivo, cache_key, encuadre y los elementos de asignaciones existentes. Responde
+409 con un job activo y 502 con detail si Claude falla. Cambiar el idioma no invalida
+el arte: usa este endpoint para textos antiguos; rehacer el plan sí puede cambiar
+asignaciones y dejar imágenes pendientes.
+
+## Búsquedas de wiki con resultado explícito
+
+El PATCH de asignación acepta URLs completas en reference_wiki o reference_page,
+incluido `index.php?title=...`. Extrae dominio y título, decodifica escapes, convierte
+`_` en espacios, elimina anclas y normaliza mayúsculas del dominio, www. y rutas.
+Por ejemplo, con una asignación ya definida:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/cards/12/theme-assignment/ \
+  -H 'Content-Type: application/json' \
+  -d '{"element":"Vol\u0027jin","category":"Personaje","visual_brief":"Al mando de sus tropas","reference_wiki":"","reference_page":"https://warcraft.wiki.gg/wiki/Vol%27jin"}'
+curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/auto-reference/ \
+  -H 'Content-Type: application/json' -d '{"force":true}'
+```
+
+La respuesta por carta agrega `auto_reference_result`:
+
+```json
+{"status":"skipped","message":"La búsqueda ya se intentó; usa force para reintentar.","skipped_reason":"already_attempted"}
+```
+
+status puede ser found, not_found, rejected, error o skipped. skipped_reason es vacío
+si se intentó; si se omitió, indica no_reference_needed, missing_wiki_or_page,
+already_has_auto_reference o already_attempted. Los errores de normalización
+responden 400 con un mensaje claro.
+
+Sin force, una referencia manual ya no bloquea la búsqueda: se puede agregar una
+automática en la siguiente posición libre. Con force se borra la automática previa
+y se busca otra; las manuales siempre se conservan. Con tres manuales devuelve error:
+«Ya hay 3 referencias manuales; quita una para agregar la de la wiki.».
+Si MediaWiki encuentra otro título mediante search, auto_reference_message informa
+«Encontrada como "<título>"». Los mensajes sin resultado incluyen la página buscada.

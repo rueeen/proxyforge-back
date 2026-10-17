@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from .models import GeneratedImage, GenerationJob, ReferenceImage
-from .wiki_images import valid_wiki
+from .wiki_images import normalize_wiki_reference
 
 
 class GenerationJobSerializer(serializers.ModelSerializer):
@@ -67,13 +67,21 @@ class ThemeAssignmentInputSerializer(serializers.Serializer):
     category = TextField(max_length=60, allow_blank=True)
     visual_brief = TextField()
     needs_reference = serializers.BooleanField(required=False)
-    reference_wiki = TextField(max_length=200, allow_blank=True, required=False)
-    reference_page = TextField(max_length=300, allow_blank=True, required=False)
+    reference_wiki = TextField(allow_blank=True, required=False)
+    reference_page = TextField(allow_blank=True, required=False)
 
-    def validate_reference_wiki(self, value):
-        if value and not valid_wiki(value):
-            raise serializers.ValidationError("Dominio de wiki inválido.")
-        return value
+    def validate(self, attrs):
+        if 'reference_wiki' in attrs or 'reference_page' in attrs:
+            assignment = self.context.get('assignment')
+            try:
+                wiki, page = normalize_wiki_reference(
+                    attrs.get('reference_wiki', assignment.reference_wiki if assignment else ''),
+                    attrs.get('reference_page', assignment.reference_page if assignment else ''),
+                )
+            except ValueError as exc:
+                raise serializers.ValidationError({'reference_wiki': [str(exc)]}) from exc
+            attrs.update(reference_wiki=wiki, reference_page=page)
+        return attrs
 
     def validate_needs_reference(self, value):
         if type(self.initial_data.get("needs_reference")) is not bool:

@@ -18,6 +18,8 @@ from decks.models import Deck, DeckCard
 from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_detail_context
 from .errors import short_error
 from .framing import apply_auto_framing
+from .text_rewriter import rewrite_deck_texts
+from .wiki_images import normalize_wiki_reference
 from .auto_references import fetch_auto_reference, fetch_auto_references
 from .jobs import expire_stale_jobs
 
@@ -126,7 +128,8 @@ class ThemeAssignmentView(APIView):
         expire_stale_jobs(entry.deck)
         if entry.deck.jobs.filter(status__in=["pending", "running"]).exists():
             return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)
-        serializer = ThemeAssignmentInputSerializer(data=request.data)
+        existing = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first()
+        serializer = ThemeAssignmentInputSerializer(data=request.data, context={'assignment': existing})
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             assignment, _ = ThemeAssignment.objects.get_or_create(deck=entry.deck, oracle_id=entry.card.oracle_id,
@@ -279,13 +282,21 @@ class AutoReferenceView(APIView):
         if entry.deck.jobs.filter(status__in=['pending', 'running']).exists():
             return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
         assignment = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first() if entry.card_id else None
-        if assignment is None or not assignment.reference_wiki or not assignment.reference_page:
+        if assignment is None:
             return Response({'detail': 'Define una asignación con reference_wiki y reference_page.'}, status=400)
+        try:
+            wiki, page = normalize_wiki_reference(assignment.reference_wiki, assignment.reference_page)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        if (wiki, page) != (assignment.reference_wiki, assignment.reference_page):
+            assignment.reference_wiki, assignment.reference_page = wiki, page
+            assignment.save(update_fields=['reference_wiki', 'reference_page'])
         force = request.data.get('force', True)
         if type(force) is not bool:
             return Response({'detail': 'force debe ser booleano.'}, status=400)
-        fetch_auto_reference(assignment, force=force)
-        return Response(DeckCardSerializer(entry, context=deck_detail_context(entry.deck, request)).data)
+        result = fetch_auto_reference(assignment, force=force)
+        data = DeckCardSerializer(entry, context=deck_detail_context(entry.deck, request)).data
+        return Response({**data, 'auto_reference_result': result})
 
 
 def _framing_card(card_id, request):
@@ -344,3 +355,18 @@ class DeckAutoFramingView(APIView):
                 summary[apply_auto_framing(image, deck.card_layout)] += 1
         data = DeckDetailSerializer(deck, context=context).data
         return Response({**data, 'framing_summary': summary})
+
+
+class RewriteTextsView(APIView):
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=['pending', 'running']).exists():
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        context = deck_detail_context(deck, request)
+        try:
+            summary = rewrite_deck_texts(deck, context)
+        except Exception as exc:
+            return Response({'detail': short_error(exc)}, status=502)
+        data = DeckDetailSerializer(deck, context=context).data
+        return Response({**data, 'rewrite_summary': summary})

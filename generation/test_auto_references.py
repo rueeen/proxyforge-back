@@ -67,37 +67,37 @@ class AutoReferenceTests(TestCase):
         item.image.save('ref.jpg', ContentFile(png()))
         return item
 
-    @patch('generation.auto_references.find_wiki_image')
-    def test_skips_manual_or_previous_attempt_and_force_retries(self, find):
+    @patch('generation.auto_references.find_wiki_image', return_value=(png('blue'), 'https://cdn.example.com/portrait.png'))
+    def test_manual_coexists_and_force_replaces_automatic(self, find):
         manual = self.reference()
-        self.assertEqual(fetch_auto_reference(self.assignment, force=True), '')
-        find.assert_not_called()
-        manual.delete()
+        result = fetch_auto_reference(self.assignment)
+        self.assertEqual(result['status'], 'found')
+        auto = ReferenceImage.objects.get(origin='auto')
+        old_path = Path(auto.image.path)
+        self.assertEqual(auto.position, manual.position + 1)
+        self.assertEqual(fetch_auto_reference(self.assignment)['skipped_reason'], 'already_has_auto_reference')
+        self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], 'found')
+        self.assertFalse(old_path.exists())
+        self.assertTrue(ReferenceImage.objects.filter(pk=manual.pk).exists())
+        self.assertEqual(ReferenceImage.objects.count(), 2)
+        self.assignment.references.filter(origin='auto').delete()
         self.assignment.auto_reference_status = 'not_found'
         self.assignment.save()
-        self.assertEqual(fetch_auto_reference(self.assignment), 'not_found')
-        find.assert_not_called()
-        find.return_value = (png(), 'https://cdn.example.com/portrait.png')
-        self.assertEqual(fetch_auto_reference(self.assignment, force=True), 'found')
-        item = ReferenceImage.objects.get()
-        self.assertEqual(item.origin, 'auto')
-        self.assertEqual(item.source_url, 'https://cdn.example.com/portrait.png')
-        self.assertFalse(self.assignment.edited)
-        self.assertEqual(fetch_auto_reference(self.assignment, force=True), 'found')
-        self.assertEqual(ReferenceImage.objects.count(), 1)
+        self.assertEqual(fetch_auto_reference(self.assignment)['skipped_reason'], 'already_attempted')
+        self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], 'found')
 
     @patch('generation.auto_references.find_wiki_image')
     def test_not_found_error_and_rejected_statuses(self, find):
         for error, status in ((WikiImageNotFound(), 'not_found'), (WikiImageError('offline'), 'error')):
             with self.subTest(status=status):
                 find.side_effect = error
-                self.assertEqual(fetch_auto_reference(self.assignment, force=True), status)
+                self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], status)
                 self.assignment.refresh_from_db()
                 self.assertEqual(self.assignment.auto_reference_status, status)
         find.side_effect = None
         find.return_value = (png(), 'https://cdn.example.com/portrait.png')
         with patch.dict(os.environ, {'AUTO_REFERENCE_VERIFY': 'true'}), patch('generation.auto_references.verify_reference', return_value=(False, 'Es un logo')):
-            self.assertEqual(fetch_auto_reference(self.assignment, force=True), 'rejected')
+            self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], 'rejected')
         self.assertEqual(self.assignment.auto_reference_message, 'Es un logo')
         self.assertFalse(ReferenceImage.objects.exists())
 
@@ -105,7 +105,7 @@ class AutoReferenceTests(TestCase):
     def test_prefetched_relation_is_invalidated_and_subset_summary(self, find):
         item = assignment_map(self.deck)[self.card.oracle_id]
         self.assertEqual(list(item.references.all()), [])
-        self.assertEqual(fetch_auto_reference(item), 'found')
+        self.assertEqual(fetch_auto_reference(item)['status'], 'found')
         self.assertEqual(len(list(item.references.all())), 1)
         self.assertEqual(fetch_auto_references(self.deck, deck_card_ids=[]), dict(found=0, not_found=0, rejected=0, error=0, skipped=0))
         summary = fetch_auto_references(self.deck, deck_card_ids=[self.entry.id])
@@ -160,6 +160,7 @@ class AutoReferenceTests(TestCase):
     @patch('generation.views.fetch_auto_references')
     @patch('generation.views.fetch_auto_reference')
     def test_endpoints_and_active_job_conflicts(self, fetch_one, fetch_deck):
+        fetch_one.return_value = {'status': 'found', 'message': '', 'skipped_reason': ''}
         fetch_deck.return_value = dict(found=1, not_found=0, rejected=0, error=0, skipped=0)
         deck_url = f'/api/decks/{self.deck.id}/auto-references/'
         card_url = f'/api/cards/{self.entry.id}/theme-assignment/auto-reference/'

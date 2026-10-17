@@ -46,6 +46,7 @@ class WikiImageTests(SimpleTestCase):
         self.assertEqual(get.call_args_list[1].kwargs['params']['list'], 'search')
         self.assertEqual(get.call_args_list[2].kwargs['params']['titles'], 'Vol’jin')
         self.assertEqual(wiki.LAST_RESULTS[('warcraft.wiki.gg', "Vol'jin")]['step'], 2)
+        self.assertEqual(wiki.LAST_RESULTS[('warcraft.wiki.gg', "Vol'jin")]['matched_title'], 'Vol’jin')
 
     def test_parse_filters_and_imageinfo(self, get, sleep):
         get.side_effect = [response(page(title='Character')), response({'parse': {'images': [
@@ -73,7 +74,10 @@ class WikiImageTests(SimpleTestCase):
 
     def test_no_result_and_network_server_errors(self, get, sleep):
         get.side_effect = [response(page()), response({'parse': {'images': []}})]
-        with self.assertRaises(wiki.WikiImageNotFound):
+        with self.assertRaisesRegex(wiki.WikiImageNotFound, 'La página "Character" no tiene imagen utilizable'):
+            wiki.find_wiki_image('example.wiki.gg', 'Character')
+        get.side_effect = [response(page(missing=True)), response({'query': {'search': []}})]
+        with self.assertRaisesRegex(wiki.WikiImageNotFound, 'No existe la página "Character" en example.wiki.gg y la búsqueda no encontró resultados'):
             wiki.find_wiki_image('example.wiki.gg', 'Character')
         get.side_effect = None
         get.return_value = response(status=500)
