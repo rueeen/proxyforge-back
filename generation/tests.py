@@ -304,7 +304,7 @@ class ContractTests(TestCase):
     def test_estimate_contract(self):
         self.generate()
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.pk}/estimate/').json(), {
-            'unique_cards': 1, 'cached': 1, 'to_generate': 0, 'estimated_cost_usd': 0.0, 'batch_limit': 5, 'batch_size': 0, 'batch_cost_usd': 0.0})
+            'unique_cards': 1, 'cached': 1, 'to_generate': 0, 'estimated_cost_usd': 0.0, 'batch_limit': 5, 'batch_size': 0, 'batch_cost_usd': 0.0, 'reference_cost_usd': 0.0})
 
     def test_backfill_and_scryfall_faces(self):
         payload = {'power': '3', 'toughness': '4', 'keywords': ['Flying']}
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0005_deck_card_layout'), ('generation', '0008_alter_referenceimage_origin')]
+        after = [('decks', '0006_deck_auto_reference_count_deck_reference_wiki_and_more'), ('generation', '0009_wikisite_themeassignment_reference_page_status_and_more')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

@@ -129,7 +129,7 @@ class PageUrlTests(SimpleTestCase):
 class BlockedAutoReferenceTests(TestCase):
     setUp = auto_tests.AutoReferenceTests.setUp
 
-    @patch('generation.auto_references.find_wiki_image', side_effect=wiki.WikiDownloadBlocked('Fandom bloquea descargas automáticas. — https://static.wikia.nocookie.net/image.png'))
+    @patch('generation.auto_references._reference_candidates', side_effect=wiki.WikiDownloadBlocked('Fandom bloquea descargas automáticas. — https://static.wikia.nocookie.net/image.png'))
     def test_status_and_summary_count_blocked(self, find):
         result = fetch_auto_reference(self.assignment)
         self.assertEqual(result['status'], 'blocked')

@@ -10,6 +10,7 @@ from .prompt_builder import normalize_theme
 from .selection import unique_entries
 from .theme_interview import deck_brief
 from .wiki_images import normalize_wiki_reference
+from .wiki_sites import probe_wiki, verify_assignment_pages
 
 SYSTEM_PROMPT = """Planifica un mazo de Magic dentro del tema solicitado. Usa referencias canónicas y específicas: personajes, enemigos, jefes, armas, ítems, vehículos, lugares, escenarios y eventos reales de la franquicia. Prefiere variedad y profundidad, no solo protagonistas.
 Asigna según función: comandante y criaturas legendarias a personajes principales o icónicos; criaturas según color, coste, fuerza/resistencia y habilidades (grandes y caras: jefes; baratas: enemigos comunes); equipos y armas a armas, mejoras o power-ups (armas de jefes o partes de armadura); vehículos a monturas o vehículos como Ride Armor; otros artefactos a ítems, tecnología y dispositivos como Sub Tank o Heart Tank; tierras a lugares y escenarios distintos para cada tipo de básica; instantáneos y conjuros a ataques, técnicas o momentos de historia; encantamientos a estados, poderes, tecnologías o fenómenos persistentes; planeswalkers a personajes clave con poder de mando.
@@ -18,6 +19,7 @@ Verifica la facción, tribu y raza canónicas de cada personaje antes de asignar
 El elemento debe encajar con la mecánica: remoción es ataque destructivo, contrahechizo es interrupción, robo de cartas es inteligencia o información. No repitas element entre cartas ni elementos ya usados. Si faltan elementos, varía escena, momento o aspecto (Zero — Z-Saber, primer plano; Zero — dash aéreo).
 Si el tema es una estética, asigna sujetos concretos y variados con la misma lógica. visual_brief debe describir en máximo 40 palabras y 1-3 frases qué se ve, qué hace y dónde: Storm Eagle en picada sobre la cubierta de la aeronave, soltando ráfagas que arrastran a un Reploid.
 brief contiene decisiones obligatorias del usuario. Si define quién representa al comandante, asigna exactamente ese elemento a la carta de sección commander. Si define facción, época o versión, todas las asignaciones deben respetarlas; permite excepciones puntuales coherentes como enemigos de otra facción en remociones. Respeta la representación de tierras o de otras categorías elegida. El estilo visual no cambia element, pero debe reflejarse en visual_brief.
+Si recibes reference_wiki, usa SIEMPRE ese dominio en reference.wiki; solo propón reference.page.
 Para reference.wiki, si la franquicia tiene una wiki comunitaria activa fuera de Fandom (por ejemplo, warcraft.wiki.gg para Warcraft, u otras wikis de wiki.gg), prefiérela: Fandom bloquea las descargas automáticas. Si solo existe en Fandom, usa Fandom igualmente; el usuario pegará la imagen a mano.
 Devuelve reference solo cuando el parecido visual importe: personajes o jefes con nombre, armas, vehículos, objetos icónicos con diseño propio y lugares famosos reconocibles. No para enemigos genéricos, conceptos, hechizos o tierras genéricas; en 100 cartas suelen ser 10 a 25. Si el tema no es una franquicia, reference siempre es null. reference es null o {"wiki": "warcraft.wiki.gg", "page": "Vol'jin"}. wiki es el dominio en minúsculas de la wiki comunitaria más completa y actual, sin https:// ni rutas (warcraft.wiki.gg, megaman.fandom.com, finalfantasy.fandom.com, starwars.fandom.com). page es el título exacto tal como aparece en su URL, pero con espacios (Vol'jin, Sylvanas Windrunner, Frostmourne), máximo 300 caracteres.
 Responde solo JSON válido: {"assignments": [{"oracle_id": "...", "element": "...", "category": "...", "visual_brief": "...", "reference": null}]}. element máximo 200 caracteres, category máximo 60."""
@@ -46,7 +48,8 @@ def build_theme_plan(deck, overwrite_edited=False, brief=None):
             data = call_claude_json(
                 system=SYSTEM_PROMPT, max_tokens=8000, retry_max_tokens=16000,
                 messages=[{'role': 'user', 'content': json.dumps(
-                    {'theme': deck.theme, 'cards': cards, 'used_elements': used_elements, 'brief': brief}, ensure_ascii=False)}],
+                    {'theme': deck.theme, 'cards': cards, 'used_elements': used_elements, 'brief': brief,
+                     **({'reference_wiki': deck.reference_wiki} if deck.reference_wiki_confirmed else {})}, ensure_ascii=False)}],
                 validate=lambda data: _validate_plan(data, requested),
             )
             for item in data['assignments']:
@@ -59,10 +62,11 @@ def build_theme_plan(deck, overwrite_edited=False, brief=None):
                 wiki = page = ''
                 if isinstance(reference, dict):
                     try:
-                        wiki, page = normalize_wiki_reference(reference.get('wiki'), reference.get('page'))
+                        wiki, page = normalize_wiki_reference(deck.reference_wiki if deck.reference_wiki_confirmed else reference.get('wiki'), reference.get('page'))
                     except ValueError:
                         pass
-                results[key].update(needs_reference=bool(wiki and page), reference_wiki=wiki, reference_page=page)
+                results[key].update(needs_reference=bool(wiki and page), reference_wiki=wiki, reference_page=page,
+                                    reference_wiki_alt=deck.reference_wiki_alt if deck.reference_wiki_confirmed else '', reference_page_status='')
                 used.add(element)
                 used_elements.append(item['element'])
         pending = [row for row in pending if row.card.oracle_id not in results]
@@ -70,7 +74,7 @@ def build_theme_plan(deck, overwrite_edited=False, brief=None):
         raise ValueError('Faltan asignaciones para: ' + ', '.join(row.card.name for row in pending))
     with transaction.atomic():
         for key, values in results.items():
-            changed = key in existing and existing[key].element != values['element']
+            changed = key in existing and any(getattr(existing[key], field) != values[field] for field in ('element', 'reference_wiki', 'reference_page'))
             defaults = {**values, 'edited': False}
             if changed:
                 defaults.update(auto_reference_status='', auto_reference_message='')
@@ -78,7 +82,20 @@ def build_theme_plan(deck, overwrite_edited=False, brief=None):
             if changed:
                 assignment.references.filter(origin='auto').delete()
         deck.theme_assignments.exclude(oracle_id__in=ids).delete()
-    return list(deck.theme_assignments.all())
+    assignments = list(deck.theme_assignments.all())
+    proposed = [item for item in assignments if item.oracle_id in results and item.reference_wiki]
+    if not deck.reference_wiki_confirmed:
+        probes = {domain: probe_wiki(domain) for domain in {item.reference_wiki for item in proposed}}
+        for item in proposed:
+            domain = item.reference_wiki
+            if not probes[domain]['ok']:
+                item.reference_wiki = ''
+                item.reference_page_status = ''
+                item.auto_reference_status = 'error'
+                item.auto_reference_message = f'La wiki "{domain}" no existe o no responde. Confirma la wiki del mazo.'[:300]
+                item.save(update_fields=['reference_wiki', 'reference_page_status', 'auto_reference_status', 'auto_reference_message'])
+    verify_assignment_pages(deck, assignments)
+    return assignments
 
 
 def _validate_plan(data, requested):

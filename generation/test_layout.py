@@ -153,7 +153,7 @@ class DeckLayoutTests(TestCase):
         for body in ({'name': 'new'}, {'card_layout': 'borderless', 'theme': 'new'}):
             result = self.client.patch(self.url, body, content_type='application/json')
             self.assertEqual(result.status_code, 400)
-            self.assertEqual(result.json(), {'detail': 'Solo se puede modificar card_layout.'})
+            self.assertEqual(result.json(), {'detail': 'Solo se puede modificar card_layout y auto_reference_count.'})
         for body in ({'card_layout': 'unknown'}, {'card_layout': None}, {}):
             self.assertEqual(self.client.patch(self.url, body, content_type='application/json').status_code, 400)
         GenerationJob.objects.create(deck=self.deck, total_cards=1)
@@ -224,7 +224,7 @@ class LayoutMigrationTests(TransactionTestCase):
     def test_existing_decks_classic_and_new_decks_borderless(self):
         before = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'),
                   ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
-        after = [('decks', '0005_deck_card_layout'), ('generation', '0008_alter_referenceimage_origin')]
+        after = [('decks', '0006_deck_auto_reference_count_deck_reference_wiki_and_more'), ('generation', '0009_wikisite_themeassignment_reference_page_status_and_more')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:

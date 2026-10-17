@@ -17,6 +17,7 @@ from .models import ThemeAssignment, ReferenceImage, GenerationJob
 from .runner import run_job
 from .selection import assignment_map
 from .test_references import png
+from .references import normalize_reference
 from .tests import make_card
 from .theme_planner import build_theme_plan
 from .wiki_images import WikiImageError, WikiImageNotFound, LAST_RESULTS
@@ -24,6 +25,27 @@ from .wiki_images import WikiImageError, WikiImageNotFound, LAST_RESULTS
 
 def response(data):
     return SimpleNamespace(content=[SimpleNamespace(type='text', text=json.dumps(data))], stop_reason='end_turn')
+
+
+def candidate_result(raw, url, avoided=False):
+    image, digest = normalize_reference(raw)
+    return ([(image, digest, url, {'maybe_fan_art': False})], avoided)
+
+
+def mock_page_requests(test):
+    def answer(url, **kwargs):
+        params = kwargs.get('params', {})
+        if params.get('meta') == 'siteinfo':
+            data = {'query': {'general': {'sitename': 'Wiki', 'lang': 'en', 'mainpage': 'Main Page'}}}
+        else:
+            data = {'query': {'pages': [{'title': title} for title in params.get('titles', '').split('|')]}}
+        return Mock(status_code=200, json=Mock(return_value=data))
+    mock = patch('generation.wiki_images.requests.get', side_effect=answer)
+    mock.start()
+    test.addCleanup(mock.stop)
+    sleep = patch('generation.wiki_images.time.sleep')
+    sleep.start()
+    test.addCleanup(sleep.stop)
 
 
 class VerifyTests(SimpleTestCase):
@@ -50,6 +72,7 @@ class VerifyTests(SimpleTestCase):
 @patch.dict(os.environ, {'AUTO_REFERENCE_VERIFY': 'false', 'AUTO_REFERENCES_IN_JOBS': 'true'})
 class AutoReferenceTests(TestCase):
     def setUp(self):
+        mock_page_requests(self)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         setting = self.settings(MEDIA_ROOT=directory.name)
@@ -67,7 +90,7 @@ class AutoReferenceTests(TestCase):
         item.image.save('ref.jpg', ContentFile(png()))
         return item
 
-    @patch('generation.auto_references.find_wiki_image', return_value=(png('blue'), 'https://cdn.example.com/portrait.png'))
+    @patch('generation.auto_references._reference_candidates', return_value=candidate_result(png('blue'), 'https://cdn.example.com/portrait.png'))
     def test_manual_coexists_and_force_replaces_automatic(self, find):
         manual = self.reference()
         result = fetch_auto_reference(self.assignment)
@@ -86,7 +109,7 @@ class AutoReferenceTests(TestCase):
         self.assertEqual(fetch_auto_reference(self.assignment)['skipped_reason'], 'already_attempted')
         self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], 'found')
 
-    @patch('generation.auto_references.find_wiki_image')
+    @patch('generation.auto_references._reference_candidates')
     def test_not_found_error_and_rejected_statuses(self, find):
         for error, status in ((WikiImageNotFound(), 'not_found'), (WikiImageError('offline'), 'error')):
             with self.subTest(status=status):
@@ -95,13 +118,13 @@ class AutoReferenceTests(TestCase):
                 self.assignment.refresh_from_db()
                 self.assertEqual(self.assignment.auto_reference_status, status)
         find.side_effect = None
-        find.return_value = (png(), 'https://cdn.example.com/portrait.png')
-        with patch.dict(os.environ, {'AUTO_REFERENCE_VERIFY': 'true'}), patch('generation.auto_references.verify_reference', return_value=(False, 'Es un logo')):
+        find.return_value = candidate_result(png(), 'https://cdn.example.com/portrait.png')
+        with patch.dict(os.environ, {'AUTO_REFERENCE_VERIFY': 'true'}), patch('generation.auto_references.verify_references', return_value=[(False, 'Es un logo')]):
             self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], 'rejected')
         self.assertEqual(self.assignment.auto_reference_message, 'Es un logo')
         self.assertFalse(ReferenceImage.objects.exists())
 
-    @patch('generation.auto_references.find_wiki_image', return_value=(png(), 'https://cdn.example.com/image.png'))
+    @patch('generation.auto_references._reference_candidates', return_value=candidate_result(png(), 'https://cdn.example.com/image.png'))
     def test_prefetched_relation_is_invalidated_and_subset_summary(self, find):
         item = assignment_map(self.deck)[self.card.oracle_id]
         self.assertEqual(list(item.references.all()), [])

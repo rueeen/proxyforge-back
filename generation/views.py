@@ -19,6 +19,8 @@ from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_det
 from .errors import short_error
 from .framing import apply_auto_framing
 from .text_rewriter import rewrite_deck_texts
+from .wiki_sites import probe_wiki, normalize_domain, verify_assignment_pages
+from .wiki_discovery import discover_wikis
 from .wiki_images import (normalize_wiki_reference, list_wiki_images, reference_page_url,
                           wiki_file_image, _download, WikiDownloadBlocked, WikiImageError, WikiImageNotFound)
 from .auto_references import fetch_auto_reference, fetch_auto_references
@@ -94,12 +96,26 @@ class DeckEstimateView(APIView):
         entries, pending = pending_entries(deck)
         to_generate = len(pending)
         price = Decimal(os.getenv("COST_PER_IMAGE_USD", "0.04"))
+        reference_price = Decimal(os.getenv("COST_PER_REFERENCE_USD", "0.01"))
+        assignments = assignment_map(deck)
+        costs = []
+        reference_cost = Decimal('0')
+        for entry in pending:
+            assignment = assignments.get(entry.card.oracle_id)
+            count = len(list(assignment.references.all())) if assignment else 0
+            if assignment and not count and assignment.needs_reference and not assignment.auto_reference_status:
+                count = deck.auto_reference_count
+            extra = reference_price * count
+            reference_cost += extra
+            costs.append(price + extra)
         size = min(batch_limit(), to_generate)
+        money = lambda value: float(value.quantize(Decimal('0.01')))
         return Response({
             "unique_cards": len(entries), "cached": len(entries) - to_generate, "to_generate": to_generate,
-            "estimated_cost_usd": float((price * to_generate).quantize(Decimal("0.01"))),
+            "estimated_cost_usd": money(sum(costs, Decimal('0'))),
+            "reference_cost_usd": money(reference_cost),
             "batch_limit": batch_limit(), "batch_size": size,
-            "batch_cost_usd": float((price * size).quantize(Decimal("0.01"))),
+            "batch_cost_usd": money(sum(costs[:size], Decimal('0'))),
         })
 
 
@@ -145,6 +161,8 @@ class ThemeAssignmentView(APIView):
                 setattr(assignment, field, value)
             assignment.edited = True
             assignment.save()
+        if changed:
+            verify_assignment_pages(entry.deck, [assignment])
         context = deck_detail_context(entry.deck, request)
         return Response(DeckCardSerializer(entry, context=context).data)
 
@@ -445,3 +463,66 @@ class WikiReferenceView(AssignmentReferencesView):
                 reference.image.delete(save=False)
             raise
         return self._response(entry, status=201)
+
+
+class WikiCandidatesView(APIView):
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        expire_stale_jobs(deck)
+        if deck.jobs.filter(status__in=['pending', 'running']).exists():
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        try:
+            discover_wikis(deck)
+        except Exception as exc:
+            return Response({'detail': short_error(exc)}, status=502)
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data)
+
+
+class ReferenceWikiView(APIView):
+    def _deck(self, deck_id):
+        return get_object_or_404(Deck, pk=deck_id)
+
+    def _active(self, deck):
+        expire_stale_jobs(deck)
+        return deck.jobs.filter(status__in=['pending', 'running']).exists()
+
+    def _response(self, deck):
+        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, self.request)).data)
+
+    def put(self, request, deck_id):
+        deck = self._deck(deck_id)
+        if self._active(deck):
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        try:
+            domain = normalize_domain(request.data.get('domain'))
+            alt = normalize_domain(request.data['alt_domain']) if request.data.get('alt_domain') else ''
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        main = probe_wiki(domain)
+        if not main['ok']:
+            return Response({'detail': f'No se pudo acceder a {domain}: {main["error"]}'}, status=400)
+        if alt:
+            alternate = probe_wiki(alt)
+            if not alternate['ok']:
+                return Response({'detail': f'No se pudo acceder a {alt}: {alternate["error"]}'}, status=400)
+        with transaction.atomic():
+            deck.reference_wiki, deck.reference_wiki_alt, deck.reference_wiki_confirmed = domain, alt, True
+            deck.save(update_fields=['reference_wiki', 'reference_wiki_alt', 'reference_wiki_confirmed'])
+            assignments = [item for item in deck.theme_assignments.filter(needs_reference=True)
+                           if not item.edited or not item.reference_wiki]
+            for item in assignments:
+                item.reference_wiki, item.reference_wiki_alt = domain, alt
+                item.auto_reference_status = item.auto_reference_message = item.reference_page_status = ''
+                item.save(update_fields=['reference_wiki', 'reference_wiki_alt', 'auto_reference_status',
+                                         'auto_reference_message', 'reference_page_status'])
+                item.references.filter(origin='auto').delete()
+        verify_assignment_pages(deck, assignments)
+        return self._response(deck)
+
+    def delete(self, request, deck_id):
+        deck = self._deck(deck_id)
+        if self._active(deck):
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        deck.reference_wiki_confirmed = False
+        deck.save(update_fields=['reference_wiki_confirmed'])
+        return self._response(deck)

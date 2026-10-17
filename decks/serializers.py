@@ -35,7 +35,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
         assignment = self.context.get("assignments", {}).get(obj.card.oracle_id) if obj.card_id else None
         if assignment is None:
             return None
-        return {**{key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited", "needs_reference", "reference_wiki", "reference_page", "auto_reference_status", "auto_reference_message")},
+        return {**{key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited", "needs_reference", "reference_wiki", "reference_wiki_alt", "reference_page", "reference_page_status", "auto_reference_status", "auto_reference_message")},
                 "reference_page_url": reference_page_url(assignment.reference_wiki, assignment.reference_page),
                 "references": ReferenceImageSerializer(assignment.references.all(), many=True, context=self.context).data}
 
@@ -93,7 +93,8 @@ class DeckDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Deck
         fields = ["id", "name", "raw_list", "theme", "card_layout", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
-                  "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale", "auto_reference_counts"]
+                  "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale", "auto_reference_counts",
+                  "reference_wiki", "reference_wiki_alt", "reference_wiki_confirmed", "wiki_candidates", "auto_reference_count"]
 
 
 class DeckListSerializer(serializers.ModelSerializer):
@@ -128,7 +129,14 @@ def deck_detail_context(deck, request, brief=None):
 
 
 class DeckLayoutSerializer(serializers.ModelSerializer):
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError("Envía card_layout o auto_reference_count.")
+        return attrs
+
+    auto_reference_count = serializers.IntegerField(min_value=1, max_value=3, required=False)
+
     class Meta:
         model = Deck
-        fields = ["card_layout"]
-        extra_kwargs = {"card_layout": {"required": True}}
+        fields = ["card_layout", "auto_reference_count"]
+        extra_kwargs = {"card_layout": {"required": False}}
