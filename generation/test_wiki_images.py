@@ -31,6 +31,9 @@ class WikiImageTests(SimpleTestCase):
                 self.assertEqual(wiki.find_wiki_image('warcraft.wiki.gg', "Vol'jin"), (b'raw image', 'https://cdn.example.com/image.png'))
                 self.assertEqual(get.call_args_list[0].kwargs['timeout'], 15)
                 self.assertEqual(get.call_args_list[1].kwargs['timeout'], 20)
+                self.assertEqual(get.call_args_list[0].kwargs['headers']['Accept'], 'application/json')
+                self.assertIn('image/jpeg', get.call_args_list[1].kwargs['headers']['Accept'])
+                self.assertEqual(wiki.HEADERS['Accept'], 'application/json')
                 params = get.call_args_list[0].kwargs['params']
                 self.assertEqual((params['format'], params['formatversion']), ('json', 2))
                 self.assertEqual(wiki.API_PATHS['warcraft.wiki.gg'], '/api.php')

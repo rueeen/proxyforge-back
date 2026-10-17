@@ -27,15 +27,16 @@ def valid_wiki(wiki):
     return isinstance(wiki, str) and len(wiki) <= 200 and re.fullmatch(WIKI_PATTERN, wiki) is not None
 
 
-def _get(url, timeout, **kwargs):
+def _get(url, timeout, accept=None, **kwargs):
     host = urlparse(url).hostname
     with _rate_lock:
         wait = 0.3 - (time.monotonic() - _last_requests.get(host, float('-inf')))
         if wait > 0:
             time.sleep(wait)
         _last_requests[host] = time.monotonic()
+    headers = {**HEADERS, 'Accept': accept} if accept else HEADERS
     try:
-        response = requests.get(url, headers=HEADERS, timeout=timeout, **kwargs)
+        response = requests.get(url, headers=headers, timeout=timeout, **kwargs)
     except requests.RequestException as exc:
         raise WikiImageError(f'Error de red: {exc}'[:200]) from exc
     if response.status_code >= 500:
@@ -77,7 +78,7 @@ def _principal(wiki, page):
 
 
 def _download(url):
-    response = _get(url, 20)
+    response = _get(url, 20, accept='image/jpeg,image/png,image/webp;q=0.9,*/*;q=0.5')
     if not 200 <= response.status_code < 300:
         raise WikiImageError(f'La descarga respondió HTTP {response.status_code}')
     mime = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
