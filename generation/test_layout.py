@@ -224,7 +224,7 @@ class LayoutMigrationTests(TransactionTestCase):
     def test_existing_decks_classic_and_new_decks_borderless(self):
         before = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'),
                   ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
-        after = [('decks', '0005_deck_card_layout'), ('generation', '0007_alter_themeassignment_auto_reference_status')]
+        after = [('decks', '0005_deck_card_layout'), ('generation', '0008_alter_referenceimage_origin')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:

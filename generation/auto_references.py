@@ -14,7 +14,7 @@ from .selection import assignment_map
 from .wiki_images import WikiDownloadBlocked, WikiImageError, WikiImageNotFound, find_wiki_image, normalize_wiki_reference, LAST_RESULTS
 
 logger = logging.getLogger(__name__)
-VERIFY_PROMPT = '''Verifica si la imagen sirve como referencia de identidad visual del elemento indicado. Sirve si muestra claramente a ese personaje u objeto (cuerpo completo, busto o primer plano), aunque sea arte conceptual, render, captura del juego o ilustración oficial. NO sirve si es un logo, un ícono diminuto, un mapa, una interfaz o pantalla de menú, un texto, una imagen grupal donde no se distingue al sujeto, o claramente otro personaje. Responde solo JSON: {"ok": true|false, "reason": "máx. 120 caracteres en español"}.'''
+VERIFY_PROMPT = '''Verifica si la imagen sirve como referencia de identidad visual del elemento indicado. Sirve si muestra claramente a ese personaje u objeto (cuerpo completo, busto o primer plano), aunque sea arte conceptual, render, captura del juego o ilustración oficial. NO sirve si es un logo, un ícono diminuto, un mapa, una interfaz o pantalla de menú, un texto, una imagen grupal donde no se distingue al sujeto, o claramente otro personaje. Si la imagen es claramente un fan art con un diseño no canónico del personaje (por ejemplo, otra armadura, otros colores característicos o le falta su pieza distintiva, como el yelmo de un personaje que siempre lo usa), responde ok=false indicando por qué. Responde solo JSON: {"ok": true|false, "reason": "máx. 120 caracteres en español"}.'''
 
 
 def enabled(name):
@@ -97,14 +97,16 @@ def fetch_auto_reference(assignment, force=False):
         assignment.references.filter(origin='auto').delete()
         getattr(assignment, '_prefetched_objects_cache', {}).pop('references', None)
         references = [item for item in references if item.origin != 'auto']
-    if sum(item.origin == 'manual' for item in references) >= 3:
+    if sum(item.origin != 'auto' for item in references) >= 3:
         return _status(assignment, 'error', MANUAL_LIMIT_MESSAGE)
     reference = None
     try:
         raw, url = find_wiki_image(assignment.reference_wiki, assignment.reference_page)
         image, digest = normalize_reference(raw)
         matched = LAST_RESULTS.get((assignment.reference_wiki, assignment.reference_page), {}).get('matched_title', '')
+        avoided = LAST_RESULTS.get((assignment.reference_wiki, assignment.reference_page), {}).get('message', '')
         message = f'Encontrada como "{matched}"' if matched else ''
+        message = '; '.join(part for part in (message, avoided) if part)
         if assignment.references.filter(sha256=digest).exists():
             return _status(assignment, 'found', message)
         if enabled('AUTO_REFERENCE_VERIFY'):

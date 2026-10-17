@@ -19,7 +19,8 @@ from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_det
 from .errors import short_error
 from .framing import apply_auto_framing
 from .text_rewriter import rewrite_deck_texts
-from .wiki_images import normalize_wiki_reference
+from .wiki_images import (normalize_wiki_reference, list_wiki_images, reference_page_url,
+                          wiki_file_image, _download, WikiDownloadBlocked, WikiImageError, WikiImageNotFound)
 from .auto_references import fetch_auto_reference, fetch_auto_references
 from .jobs import expire_stale_jobs
 
@@ -370,3 +371,77 @@ class RewriteTextsView(APIView):
             return Response({'detail': short_error(exc)}, status=502)
         data = DeckDetailSerializer(deck, context=context).data
         return Response({**data, 'rewrite_summary': summary})
+
+
+class WikiImagesView(AssignmentReferencesView):
+    http_method_names = ['get', 'head', 'options']
+
+    def get(self, request, card_id):
+        entry = self._entry(card_id)
+        assignment = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first() if entry.card_id else None
+        if assignment is None:
+            return Response({'detail': 'Primero define o genera el plan temático de esta carta.'}, status=400)
+        wiki = request.query_params.get('wiki', assignment.reference_wiki)
+        page = request.query_params.get('page', assignment.reference_page)
+        try:
+            wiki, page = normalize_wiki_reference(wiki, page)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        try:
+            data = list_wiki_images(wiki, page)
+        except WikiImageNotFound as exc:
+            return Response({'detail': str(exc)}, status=404)
+        except WikiImageError as exc:
+            return Response({'detail': str(exc)}, status=502)
+        return Response({**data, 'page_url': reference_page_url(data['wiki'], data['page'])})
+
+
+class WikiReferenceView(AssignmentReferencesView):
+    http_method_names = ['post', 'options']
+
+    def post(self, request, card_id):
+        entry = self._entry(card_id)
+        if self._active(entry):
+            return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        assignment = entry.deck.theme_assignments.filter(oracle_id=entry.card.oracle_id).first() if entry.card_id else None
+        if assignment is None:
+            return Response({'detail': 'Primero define o genera el plan temático de esta carta.'}, status=400)
+        if assignment.references.count() >= 3:
+            return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+        try:
+            wiki, _ = normalize_wiki_reference(request.data.get('wiki', assignment.reference_wiki), 'Archivo')
+            filename = request.data.get('file')
+            wiki, filename, url = wiki_file_image(wiki, filename)
+            raw, _ = _download(url, wiki)
+            image_bytes, digest = normalize_reference(raw)
+        except WikiDownloadBlocked as exc:
+            return Response({'detail': str(exc), 'blocked': True, 'full_url': url}, status=400)
+        except ValueError as exc:
+            return Response({'detail': str(exc)}, status=400)
+        except WikiImageNotFound as exc:
+            return Response({'detail': str(exc)}, status=404)
+        except WikiImageError as exc:
+            return Response({'detail': str(exc)}, status=502)
+        reference = None
+        try:
+            with transaction.atomic():
+                assignment = ThemeAssignment.objects.select_for_update().get(pk=assignment.pk)
+                existing = list(assignment.references.all())
+                if len(existing) >= 3:
+                    return Response({'detail': 'Máximo 3 imágenes de referencia por carta.'}, status=400)
+                if any(item.sha256 == digest for item in existing):
+                    return Response({'detail': 'Esa imagen ya está agregada.'}, status=400)
+                reference = ReferenceImage(assignment=assignment, origin='wiki',
+                                           source_url=reference_page_url(wiki, 'File:' + filename), sha256=digest,
+                                           position=max((item.position for item in existing), default=-1) + 1)
+                reference.image.save(f'{uuid4().hex}.jpg', ContentFile(image_bytes), save=False)
+                reference.save()
+                assignment.edited = True
+                assignment.auto_reference_status = 'found'
+                assignment.auto_reference_message = ''
+                assignment.save(update_fields=['edited', 'auto_reference_status', 'auto_reference_message', 'updated_at'])
+        except Exception:
+            if reference is not None and reference.image:
+                reference.image.delete(save=False)
+            raise
+        return self._response(entry, status=201)

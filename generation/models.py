@@ -59,7 +59,7 @@ class ThemeAssignment(models.Model):
 
 
 class ReferenceImage(models.Model):
-    origin = models.CharField(max_length=10, choices=[("manual", "Manual"), ("auto", "Automática")], default="manual")
+    origin = models.CharField(max_length=10, choices=[("manual", "Manual"), ("auto", "Automática"), ("wiki", "Elegida de la wiki")], default="manual")
     assignment = models.ForeignKey(ThemeAssignment, related_name="references", on_delete=models.CASCADE)
     image = models.ImageField(upload_to="references/")
     source_url = models.URLField(blank=True, max_length=1000)

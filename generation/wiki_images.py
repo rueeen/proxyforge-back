@@ -12,6 +12,9 @@ WIKI_PATTERN = r'^[a-z0-9.-]+\.[a-z]{2,}$'
 HEADERS = {'User-Agent': 'ProxyForge/1.0 (herramienta personal local)', 'Accept': 'application/json'}
 API_PATHS = {}
 LAST_RESULTS = {}
+IMAGE_LIST_CACHE = {}
+EXCLUDED_IMAGES = ('icon', 'logo', 'banner', 'map', 'mapa', 'symbol', 'sigil',
+                   'crest', 'flag', 'stub', 'button', 'achievement', 'ability_', 'inv_', 'spell_')
 _last_requests = {}
 _rate_lock = threading.Lock()
 
@@ -109,7 +112,7 @@ def _query(wiki, **params):
 
 
 def _principal(wiki, page):
-    data = _query(wiki, action='query', prop='pageimages', piprop='original|thumbnail',
+    data = _query(wiki, action='query', prop='pageimages', piprop='original|thumbnail|name',
                   pithumbsize=1536, titles=page, redirects=1)
     pages = data.get('query', {}).get('pages') or []
     info = pages[0] if pages else {'missing': True}
@@ -177,6 +180,88 @@ def _download(url, wiki='', fallback_url=None):
         return _download_one(fallback_url, wiki), fallback_url
 
 
+def looks_like_fan_art(filename):
+    name = filename.lower().replace('_', ' ')
+    return any(fragment in name for fragment in (' by ', 'fanart', 'fan art', 'deviantart', 'artstation', 'commission'))
+
+
+def _usable_filename(name):
+    return (isinstance(name, str) and not name.lower().endswith(('.svg', '.gif'))
+            and not any(word in name.lower() for word in EXCLUDED_IMAGES))
+
+
+def list_wiki_images(wiki: str, page: str, limit: int = 40) -> dict:
+    try:
+        wiki, page = normalize_wiki_reference(wiki, page)
+    except ValueError as exc:
+        raise WikiImageError(str(exc)) from exc
+    key = (wiki, page)
+    cached = IMAGE_LIST_CACHE.get(key)
+    if cached and time.monotonic() - cached[0] < 600:
+        return {**cached[1], 'images': [dict(item) for item in cached[1]['images'][:limit]]}
+    data = _query(wiki, action='query', prop='pageimages', piprop='name', titles=page, redirects=1)
+    pages = data.get('query', {}).get('pages') or []
+    info = pages[0] if pages else {'missing': True}
+    if info.get('missing'):
+        search = _query(wiki, action='query', list='search', srsearch=page, srlimit=1, srnamespace=0)
+        matches = search.get('query', {}).get('search') or []
+        if not matches:
+            raise WikiImageNotFound(f'No existe la página "{page}" en {wiki}')
+        data = _query(wiki, action='query', prop='pageimages', piprop='name', titles=matches[0]['title'], redirects=1)
+        pages = data.get('query', {}).get('pages') or []
+        info = pages[0] if pages else {'missing': True}
+        if info.get('missing'):
+            raise WikiImageNotFound(f'No existe la página "{page}" en {wiki}')
+    title = info.get('title') or page
+    principal = info.get('pageimage', '')
+    data = _query(wiki, action='parse', page=title, prop='images', redirects=1)
+    filenames = list(dict.fromkeys(name for name in [principal, *(data.get('parse', {}).get('images') or [])]
+                                  if name and _usable_filename(name)))
+    images = []
+    for offset in range(0, len(filenames), 50):
+        data = _query(wiki, action='query', titles='|'.join('File:' + name for name in filenames[offset:offset + 50]),
+                      prop='imageinfo', iiprop='url|size|mime', iiurlwidth=320)
+        for entry in data.get('query', {}).get('pages') or []:
+            details = entry.get('imageinfo') or []
+            if not details:
+                continue
+            image = details[0]
+            width, height = image.get('width', 0), image.get('height', 0)
+            if image.get('mime') not in ('image/jpeg', 'image/png', 'image/webp') or min(width, height) < 300:
+                continue
+            filename = entry.get('title', '').split(':', 1)[-1]
+            images.append(dict(file=filename, thumb_url=image.get('thumburl', ''), full_url=image.get('url', ''),
+                               width=width, height=height, is_page_image=filename.replace('_', ' ') == principal.replace('_', ' '),
+                               maybe_fan_art=looks_like_fan_art(filename)))
+    images.sort(key=lambda item: (not item['is_page_image'], item['maybe_fan_art'], -item['width'] * item['height']))
+    result = dict(wiki=wiki, page=title, fandom=_is_fandom(wiki, ''), images=images)
+    IMAGE_LIST_CACHE[key] = (time.monotonic(), result)
+    return {**result, 'images': [dict(item) for item in images[:limit]]}
+
+
+def wiki_file_image(wiki, filename):
+    """Resolve a selected file without downloading it, so blocked responses can link it."""
+    if not isinstance(filename, str) or not filename.strip() or len(filename) > 300 or '|' in filename:
+        raise ValueError('Nombre de archivo de wiki inválido.')
+    filename = filename.strip()
+    if filename.startswith('File:'):
+        filename = filename[5:]
+    wiki, _ = normalize_wiki_reference(wiki, 'File:' + filename)
+    data = _query(wiki, action='query', titles='File:' + filename, prop='imageinfo',
+                  iiprop='url|size|mime', iiurlwidth=1536)
+    pages = data.get('query', {}).get('pages') or []
+    images = pages[0].get('imageinfo') or [] if pages else []
+    if not images:
+        raise WikiImageNotFound('El archivo no existe en la wiki.')
+    image = images[0]
+    if image.get('mime') not in ('image/jpeg', 'image/png', 'image/webp'):
+        raise WikiImageError('El archivo no es una imagen JPEG, PNG o WEBP.')
+    url = image.get('thumburl') or image.get('url')
+    if not url:
+        raise WikiImageNotFound('El archivo no tiene una URL de imagen.')
+    return wiki, filename, url
+
+
 def find_wiki_image(wiki, page):
     try:
         wiki, page = normalize_wiki_reference(wiki, page)
@@ -201,13 +286,19 @@ def find_wiki_image(wiki, page):
         fallback_url = thumbnail if original else None
         title = info.get('title') or title
         step = 2
+    avoided = ''
+    filename = info.get('pageimage') or unquote(urlparse(url or '').path).rsplit('/', 1)[-1]
+    if url and looks_like_fan_art(filename):
+        candidates = list_wiki_images(wiki, title)
+        alternative = next((image for image in candidates['images'] if not image['maybe_fan_art']
+                            and max(image['width'], image['height']) >= 600), None)
+        if alternative:
+            url, fallback_url = alternative['full_url'], alternative['thumb_url']
+            avoided = f'Se evitó la imagen principal (posible fan art) y se usó "{alternative["file"]}"'
     if not url:
         data = _query(wiki, action='parse', page=title, prop='images', redirects=1)
         filenames = data.get('parse', {}).get('images') or []
-        excluded = ('icon', 'logo', 'banner', 'map', 'mapa', 'symbol', 'sigil', 'crest', 'flag', 'stub', 'button')
-        filename = next((name for name in filenames if isinstance(name, str)
-                         and not name.lower().endswith(('.svg', '.gif'))
-                         and not any(word in name.lower() for word in excluded)), None)
+        filename = next((name for name in filenames if _usable_filename(name)), None)
         if filename:
             data = _query(wiki, action='query', titles=f'File:{filename}', prop='imageinfo',
                           iiprop='url|size|mime', iiurlwidth=1536)
@@ -220,6 +311,6 @@ def find_wiki_image(wiki, page):
     if not url:
         raise WikiImageNotFound(f'La página "{title}" no tiene imagen utilizable')
     raw, url = _download(url, wiki, fallback_url)
-    LAST_RESULTS[(wiki, page)] = {'api': API_PATHS[wiki], 'step': step, 'url': url,
+    LAST_RESULTS[(wiki, page)] = {'api': API_PATHS.get(wiki, '/api.php'), 'message': avoided, 'step': step, 'url': url,
                                   'matched_title': title if searched and title != page else ''}
     return raw, url
