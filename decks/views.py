@@ -45,8 +45,8 @@ class DeckDetailView(APIView):
 
     def patch(self, request, deck_id):
         deck = get_object_or_404(Deck, pk=deck_id)
-        if not isinstance(request.data, dict) or set(request.data) - {"card_layout"}:
-            return Response({"detail": "Solo se puede modificar card_layout."}, status=400)
+        if not isinstance(request.data, dict) or set(request.data) - {"card_layout", "auto_reference_count"}:
+            return Response({"detail": "Solo se puede modificar card_layout y auto_reference_count."}, status=400)
         expire_stale_jobs(deck)
         if deck.jobs.filter(status__in=["pending", "running"]).exists():
             return Response({"detail": "Hay una generación en curso para este mazo."}, status=409)

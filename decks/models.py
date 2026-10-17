@@ -1,4 +1,12 @@
+import os
+
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
+
+
+def default_auto_reference_count():
+    return max(1, min(3, int(os.getenv("AUTO_REFERENCE_COUNT", "2"))))
+
 
 
 class Card(models.Model):
@@ -35,6 +43,12 @@ class Deck(models.Model):
     raw_list = models.TextField()
     theme = models.TextField()
     card_layout = models.CharField(max_length=20, choices=[("borderless", "Sin borde"), ("classic", "Clásico")], default="borderless")
+    reference_wiki = models.CharField(max_length=200, blank=True)
+    reference_wiki_alt = models.CharField(max_length=200, blank=True)
+    reference_wiki_confirmed = models.BooleanField(default=False)
+    wiki_candidates = models.JSONField(default=list, blank=True)
+    auto_reference_count = models.PositiveSmallIntegerField(default=default_auto_reference_count,
+        validators=[MinValueValidator(1), MaxValueValidator(3)])
     theme_questions = models.JSONField(default=list, blank=True)
     theme_answers = models.JSONField(default=dict, blank=True)
     theme_answers_updated_at = models.DateTimeField(null=True, blank=True)

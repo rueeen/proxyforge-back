@@ -93,6 +93,7 @@ class CandidateTests(SimpleTestCase):
 class SelectorEndpointTests(TestCase):
     def setUp(self):
         test_references.ReferenceEndpointTests.setUp(self)
+        test_auto_references.mock_page_requests(self)
         self.assignment.reference_wiki = 'warcraft.wiki.gg'
         self.assignment.reference_page = 'Arthas'
         self.assignment.save()
@@ -162,6 +163,7 @@ class SelectorEndpointTests(TestCase):
     def test_patch_keeps_chosen_wiki_reference(self, get, sleep):
         self.prepare(get)
         self.assertEqual(self.select().status_code, 201)
+        get.side_effect = [response(page(title='Lich King'))]
         result = self.client.patch(self.url.replace('references/', ''), {'reference_page': 'Lich King', 'element': self.assignment.element, 'category': self.assignment.category, 'visual_brief': self.assignment.visual_brief}, content_type='application/json')
         self.assertEqual(result.status_code, 200)
         self.assertTrue(self.assignment.references.filter(origin='wiki').exists())
@@ -172,18 +174,18 @@ class ChosenReferencePreservationTests(TestCase):
     setUp = test_auto_references.AutoReferenceTests.setUp
     reference = test_auto_references.AutoReferenceTests.reference
 
-    @patch('generation.auto_references.find_wiki_image', return_value=(png('blue'), 'https://cdn.example/official.png'))
+    @patch('generation.auto_references._reference_candidates', return_value=test_auto_references.candidate_result(png('blue'), 'https://cdn.example/official.png'))
     def test_force_preserves_wiki_references_and_full_limit(self, find):
         chosen = self.reference('wiki')
         wiki.LAST_RESULTS[(self.assignment.reference_wiki, self.assignment.reference_page)] = {'message': 'Se evitó la imagen principal (posible fan art) y se usó "Official.jpg"'}
         self.addCleanup(wiki.LAST_RESULTS.clear)
         result = fetch_auto_reference(self.assignment, force=True)
         self.assertEqual(result['status'], 'found')
-        self.assertIn('Se evitó', result['message'])
+        self.assertEqual(result['message'], 'Se agregaron 1 referencias')
         self.assertTrue(ReferenceImage.objects.filter(pk=chosen.pk).exists())
         self.assignment.references.filter(origin='auto').delete()
         self.reference('wiki')
         self.reference('manual')
         find.reset_mock()
-        self.assertEqual(fetch_auto_reference(self.assignment, force=True)['status'], 'error')
+        self.assertEqual(fetch_auto_reference(self.assignment, force=True)['skipped_reason'], 'references_full')
         find.assert_not_called()

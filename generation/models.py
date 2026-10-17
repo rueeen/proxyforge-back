@@ -43,6 +43,8 @@ class ThemeAssignment(models.Model):
                    ("rejected", "Descartada"), ("error", "Error"), ("blocked", "Descarga bloqueada")]
     needs_reference = models.BooleanField(default=False)
     reference_wiki = models.CharField(max_length=200, blank=True)
+    reference_wiki_alt = models.CharField(max_length=200, blank=True)
+    reference_page_status = models.CharField(max_length=10, blank=True)
     reference_page = models.CharField(max_length=300, blank=True)
     auto_reference_status = models.CharField(max_length=20, choices=AUTO_STATUS, blank=True)
     auto_reference_message = models.CharField(max_length=300, blank=True)
@@ -75,3 +77,14 @@ class ReferenceImage(models.Model):
 def delete_reference_file(sender, instance, **kwargs):
     if instance.image:
         instance.image.delete(save=False)
+
+
+class WikiSite(models.Model):
+    domain = models.CharField(max_length=200, unique=True)
+    ok = models.BooleanField(default=False)
+    sitename = models.CharField(max_length=300, blank=True)
+    lang = models.CharField(max_length=30, blank=True)
+    fandom = models.BooleanField(default=False)
+    main_page_url = models.URLField(max_length=1000, blank=True)
+    error = models.CharField(max_length=200, blank=True)
+    checked_at = models.DateTimeField()

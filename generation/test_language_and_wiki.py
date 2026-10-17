@@ -58,7 +58,7 @@ class LanguageAndNormalizationTests(SimpleTestCase):
 class ReliableWikiAndRewriteTests(TestCase):
     setUp = auto_tests.AutoReferenceTests.setUp
     reference = auto_tests.AutoReferenceTests.reference
-    @patch('generation.auto_references.find_wiki_image', return_value=(png('blue'), 'https://cdn.example.com/new.png'))
+    @patch('generation.auto_references._reference_candidates', return_value=auto_tests.candidate_result(png('blue'), 'https://cdn.example.com/new.png'))
     def test_force_replaces_auto_even_when_not_marked_needed(self, find):
         auto = self.reference('auto')
         path = Path(auto.image.path)
@@ -70,12 +70,12 @@ class ReliableWikiAndRewriteTests(TestCase):
         self.assertFalse(ReferenceImage.objects.filter(pk=auto.pk).exists())
         self.assertEqual(ReferenceImage.objects.get().origin, 'auto')
 
-    @patch('generation.auto_references.find_wiki_image')
+    @patch('generation.auto_references._reference_candidates')
     def test_three_manual_references_and_skip_reasons(self, find):
         for _ in range(3):
             self.reference('manual')
         result = fetch_auto_reference(self.assignment)
-        self.assertEqual(result, {'status': 'error', 'message': MANUAL_LIMIT_MESSAGE, 'skipped_reason': ''})
+        self.assertEqual(result, {'status': 'skipped', 'message': MANUAL_LIMIT_MESSAGE, 'skipped_reason': 'references_full'})
         find.assert_not_called()
         self.assignment.references.all().delete()
         self.assignment.needs_reference = False
@@ -87,11 +87,11 @@ class ReliableWikiAndRewriteTests(TestCase):
         self.assignment.reference_page = 'A plain title'
         self.assertEqual(fetch_auto_reference(self.assignment, force=True)['skipped_reason'], 'missing_wiki_or_page')
 
-    @patch('generation.auto_references.find_wiki_image', return_value=(png(), 'https://cdn.example.com/portrait.png'))
+    @patch('generation.auto_references._reference_candidates', return_value=auto_tests.candidate_result(png(), 'https://cdn.example.com/portrait.png'))
     def test_success_message_includes_matched_title(self, find):
         with patch.dict(LAST_RESULTS, {(self.assignment.reference_wiki, self.assignment.reference_page): {'matched_title': 'Vol’jin (Darkspear)'}}, clear=True):
             result = fetch_auto_reference(self.assignment)
-        self.assertEqual(result['message'], 'Encontrada como "Vol’jin (Darkspear)"')
+        self.assertEqual(result['message'], 'Se agregaron 1 referencias')
         self.assignment.refresh_from_db()
         self.assertEqual(self.assignment.auto_reference_message, result['message'])
 

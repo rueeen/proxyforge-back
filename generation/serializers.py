@@ -68,9 +68,16 @@ class ThemeAssignmentInputSerializer(serializers.Serializer):
     visual_brief = TextField()
     needs_reference = serializers.BooleanField(required=False)
     reference_wiki = TextField(allow_blank=True, required=False)
+    reference_wiki_alt = TextField(allow_blank=True, required=False, max_length=200)
     reference_page = TextField(allow_blank=True, required=False)
 
     def validate(self, attrs):
+        if attrs.get("reference_wiki_alt"):
+            from .wiki_sites import normalize_domain
+            try:
+                attrs["reference_wiki_alt"] = normalize_domain(attrs["reference_wiki_alt"])
+            except ValueError as exc:
+                raise serializers.ValidationError({"reference_wiki_alt": [str(exc)]}) from exc
         if 'reference_wiki' in attrs or 'reference_page' in attrs:
             assignment = self.context.get('assignment')
             try:

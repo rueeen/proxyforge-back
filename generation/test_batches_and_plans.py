@@ -66,7 +66,7 @@ class BatchAndPlanTests(TestCase):
         self.cached(self.entries[0])
         estimate = self.client.get(f'/api/decks/{self.deck.pk}/estimate/').json()
         self.assertEqual(estimate, dict(unique_cards=8, cached=1, to_generate=7, estimated_cost_usd=0.28,
-                                       batch_limit=5, batch_size=5, batch_cost_usd=0.20))
+                                       batch_limit=5, batch_size=5, batch_cost_usd=0.20, reference_cost_usd=0.0))
         for entry in self.entries[1:]:
             self.cached(entry)
         result = self.generate()
@@ -123,7 +123,7 @@ class BatchAndPlanTests(TestCase):
         data = dict(element='Storm Eagle', category='', visual_brief='Storm Eagle vuela')
         result = self.client.patch(f'/api/cards/{entry.pk}/theme-assignment/', data, content_type='application/json')
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()['theme_assignment'], {**data, 'edited': True, 'references': [], 'needs_reference': False, 'reference_wiki': '', 'reference_page': '', 'auto_reference_status': '', 'auto_reference_message': '', 'reference_page_url': ''})
+        self.assertEqual(result.json()['theme_assignment'], {**data, 'edited': True, 'references': [], 'needs_reference': False, 'reference_wiki': '', 'reference_wiki_alt': '', 'reference_page_status': '', 'reference_page': '', 'auto_reference_status': '', 'auto_reference_message': '', 'reference_page_url': ''})
         self.assertIsNone(result.json()['generated_image'])
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.pk}/estimate/').json()['cached'], 0)
         planned = ThemeAssignment.objects.get()
