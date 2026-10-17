@@ -11,6 +11,7 @@ from django.core.files.base import ContentFile
 from django.db import connection
 from django.utils import timezone
 
+from .errors import short_error
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
 from .selection import unique_entries, assignment_map
@@ -63,7 +64,7 @@ def render_card_image(card, theme, provider, assignment=None, brief=None) -> tup
             prompt_json["used_prompt"] = prompt_type
             prompt_json["used_provider"] = attempt_provider.name
             return prompt_json, image_bytes
-    raise RuntimeError("; ".join(failures)) from last_error
+    raise RuntimeError(short_error("; ".join(failures))) from last_error
 
 
 def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=None, brief=None) -> GeneratedImage:
@@ -118,7 +119,7 @@ def run_job(job_id):
             except Exception as exc:  # Continue so one provider failure does not abort the deck.
                 logger.exception("No se pudo generar arte para %s", card.name)
                 job.failed_cards += 1
-                job.error_message = str(exc)
+                job.error_message = short_error(exc)
             job.save(update_fields=["completed_cards", "failed_cards", "error_message", "updated_at"])
         job.status = "failed" if cards and job.failed_cards == len(cards) else "done"
         job.finished_at = timezone.now()
@@ -126,7 +127,7 @@ def run_job(job_id):
     except Exception as exc:
         logger.exception("El job %s falló antes de completar el procesamiento", job_id)
         GenerationJob.objects.filter(pk=job_id).update(
-            status="failed", error_message=str(exc), finished_at=timezone.now(), updated_at=timezone.now()
+            status="failed", error_message=short_error(exc), finished_at=timezone.now(), updated_at=timezone.now()
         )
     finally:
         connection.close()

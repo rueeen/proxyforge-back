@@ -8,6 +8,8 @@ from django.conf import settings
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from generation.errors import short_error
+
 from .client import HEADERS
 
 CACHE_SECONDS = 7 * 24 * 60 * 60
@@ -29,7 +31,7 @@ class SymbologyView(APIView):
             data = [{key: item[key] for key in ('symbol', 'svg_uri', 'english')}
                     for item in response.json()['data']]
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
-            return Response(cached) if cached is not None else Response({'detail': str(exc)}, status=502)
+            return Response(cached) if cached is not None else Response({'detail': short_error(exc)}, status=502)
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(f'.{uuid4().hex}.tmp')
         temporary.write_text(json.dumps(data))

@@ -75,7 +75,7 @@ class InterviewTests(TestCase):
         DeckCard.objects.create(deck=self.deck, card=card, raw_name=card.name, quantity=4, section='main')
         return card
 
-    @patch('generation.theme_interview.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_questions_use_actual_deck_and_assign_ids(self, anthropic):
         land = self.add_card(name='Island', type_line='Basic Land — Island', color_identity=['U'], cmc=99)
         legendary = self.add_card(name='Legendary ally', type_line='Criatura legendaria — Elfo', cmc=1)
@@ -103,7 +103,7 @@ class InterviewTests(TestCase):
                             for item in data['notable_cards']))
         self.assertEqual(create.call_args.kwargs['max_tokens'], 3000)
 
-    @patch('generation.theme_interview.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_truncation_defaults_and_generated_ids(self, anthropic):
         data = question_payload()
         data['questions'] *= 5
@@ -120,7 +120,7 @@ class InterviewTests(TestCase):
         self.assertEqual(len(questions[0]['options'][0]['label']), 80)
         self.assertEqual(len(questions[0]['options'][0]['detail']), 140)
 
-    @patch('generation.theme_interview.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_invalid_question_retries_once(self, anthropic):
         data = question_payload()
         data['questions'][0]['options'] = [{'label': 'Only one'}]
@@ -135,7 +135,7 @@ class InterviewTests(TestCase):
         self.assertEqual(build_theme_questions(self.deck)[0]['id'], 'q1')
         self.assertEqual(create.call_count, 2)
 
-    @patch('generation.theme_interview.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_zero_questions_and_invalid_boolean(self, anthropic):
         create = anthropic.return_value.messages.create
         create.return_value = response({'questions': []})
@@ -205,9 +205,9 @@ class InterviewTests(TestCase):
         self.deck.refresh_from_db()
         self.assertEqual(self.deck.theme_answers, {})
 
-    @patch('generation.theme_planner.Anthropic')
-    @patch('generation.prompt_builder.Anthropic')
-    def test_planner_and_card_prompt_use_brief(self, visual, planner):
+    @patch('generation.claude_client.Anthropic')
+    def test_planner_and_card_prompt_use_brief(self, planner):
+        visual = planner
         self.save_answers({'q1': {'option_ids': ['a']}})
         self.deck.refresh_from_db()
         expected = deck_brief(self.deck)
@@ -248,7 +248,7 @@ class InterviewTests(TestCase):
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.id}/estimate/').json()['to_generate'], 1)
         self.assertIsNone(self.client.get(f'/api/decks/{self.deck.id}/').json()['cards'][0]['generated_image'])
 
-    @patch('generation.theme_planner.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_plan_stale_then_rebuilt(self, anthropic):
         planned = ThemeAssignment.objects.create(deck=self.deck, oracle_id=self.card.oracle_id,
                                                  element='Arthas', category='', visual_brief='Una escena')

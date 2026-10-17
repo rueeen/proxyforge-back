@@ -26,6 +26,7 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | --- | --- |
 | `SECRET_KEY` | Clave de Django; cámbiala fuera del desarrollo local. |
 | `DEBUG` | Activa depuración y servicio local de archivos media. |
+| `ANTHROPIC_CARD_MAX_TOKENS` | Presupuesto de salida del prompt por carta; predeterminado `4000`. Si Claude corta la respuesta por largo, reintenta automáticamente una vez con el doble. |
 | `ANTHROPIC_MODEL` | Modelo de Claude; predeterminado `claude-sonnet-4-6`. |
 | `STALE_JOB_MINUTES` | Expira jobs pending/running sin actualización; predeterminado `10` minutos. |
 | `ANTHROPIC_API_KEY` | Generación del prompt visual con Claude. |
@@ -196,7 +197,7 @@ curl -X POST http://127.0.0.1:8000/api/decks/1/generate/ \
 El estimado incluye `batch_size = min(batch_limit, to_generate)` y `batch_cost_usd`.
 Los costes mostrados corresponden a imágenes; no incluyen el plan ni prompts de Claude.
 
-El plan hace una llamada a Claude para asignar un elemento concreto y distinto a cada
+El plan procesa lotes de hasta 30 cartas con Claude para asignar un elemento concreto y distinto a cada
 carta única según su función, incluyendo personajes y referencias canónicas si el tema
 es una franquicia, o sujetos variados si es una estética. Si faltan asignaciones, hace
 un único reintento solo con las cartas faltantes. Puede prepararse antes de generar:
@@ -315,3 +316,19 @@ son posteriores a la asignación no editada más reciente: vuelve a generar el p
 antes de la siguiente tanda. Si no hay asignaciones no editadas, el indicador es
 false. El prompt sigue en v3: con brief vacío las claves de caché permanecen iguales
 a las de los mazos que no usan entrevista.
+
+
+## Respuestas de Claude y límites de salida
+
+Los prompts por carta usan `ANTHROPIC_CARD_MAX_TOKENS=4000` y piden campos breves;
+`full_prompt` y `fallback_prompt` se escriben en inglés, mientras que nombre y flavor
+siguen en español. El planner procesa lotes de 30 cartas con 8000 tokens por lote,
+compartiendo los elementos ya usados. La entrevista dispone de 3000 tokens.
+
+Si Claude informa `stop_reason=max_tokens`, se reintenta automáticamente una vez con
+el doble de tokens (16000 en el planner), el mensaje original y una instrucción de
+concisión. La respuesta truncada no se agrega al historial. El JSON inválido sin
+truncamiento usa el reintento de corrección habitual. Si ambos intentos fallan, la
+API y el job muestran un mensaje corto; las respuestas fallidas se registran solo en
+logs, hasta 2000 caracteres cada una. Los errores de generación se limitan a 500
+caracteres. El contrato de la API, PROMPT_VERSION v3 y las claves de caché se mantienen.

@@ -73,7 +73,7 @@ class BatchAndPlanTests(TestCase):
         self.assertEqual(result.status_code, 400)
         self.assertEqual(result.json(), {'detail': 'No hay cartas pendientes de generar.'})
 
-    @patch('generation.theme_planner.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_plan_missing_retry_edited_cleanup(self, anthropic):
         edited = ThemeAssignment.objects.create(deck=self.deck, **assignment(self.entries[0].card, 'Zero'), edited=True)
         stale = ThemeAssignment.objects.create(deck=self.deck, oracle_id=uuid4(), element='Old', category='', visual_brief='Old')
@@ -90,13 +90,13 @@ class BatchAndPlanTests(TestCase):
         self.assertIn('Zero', first['used_elements'])
         second = json.loads(create.call_args_list[1].kwargs['messages'][0]['content'])
         self.assertEqual([card['oracle_id'] for card in second['cards']], [str(cards[-1].oracle_id)])
-        self.assertEqual(create.call_args.kwargs['max_tokens'], 16000)
+        self.assertEqual(create.call_args.kwargs['max_tokens'], 8000)
         edited.refresh_from_db()
         self.assertEqual(edited.element, 'Zero')
         self.assertTrue(edited.edited)
         self.assertFalse(ThemeAssignment.objects.filter(pk=stale.pk).exists())
 
-    @patch('generation.theme_planner.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_missing_ids_error_and_duplicate_validation(self, anthropic):
         create = anthropic.return_value.messages.create
         create.return_value = response([dict(oracle_id=str(uuid4()), element='Unknown')])
@@ -105,10 +105,10 @@ class BatchAndPlanTests(TestCase):
         self.assertEqual(create.call_count, 2)
         self.assertFalse(self.deck.theme_assignments.exists())
         create.return_value = response([assignment(self.entries[0].card)] * 2)
-        with self.assertRaisesRegex(ValueError, 'duplicado'):
+        with self.assertRaisesRegex(ValueError, 'JSON inválido'):
             build_theme_plan(self.deck)
 
-    @patch('generation.theme_planner.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_overwrite_edited(self, anthropic):
         for i, entry in enumerate(self.entries):
             ThemeAssignment.objects.create(deck=self.deck, **assignment(entry.card, f'Old {i}'), edited=True)
@@ -160,7 +160,7 @@ class BatchAndPlanTests(TestCase):
         GenerationJob.objects.create(deck=self.deck, total_cards=1)
         self.assertEqual(self.client.post(url, {}, content_type='application/json').status_code, 409)
 
-    @patch('generation.prompt_builder.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_visual_prompt_assignment_input(self, anthropic):
         anthropic.return_value.messages.create.return_value = SimpleNamespace(
             content=[SimpleNamespace(type='text', text=json.dumps(valid_prompt()))])

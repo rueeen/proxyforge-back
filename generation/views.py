@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from decks.models import Deck, DeckCard
 from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_detail_context
+from .errors import short_error
 from .jobs import expire_stale_jobs
 
 from .models import GeneratedImage, GenerationJob, ThemeAssignment
@@ -71,7 +72,7 @@ class RegenerateCardView(APIView):
                 if old_file:
                     transaction.on_commit(lambda: old_file.delete(save=False))
         except Exception as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({"detail": short_error(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}, "assignments": assignments, "brief": brief}).data)
 
 
@@ -103,7 +104,7 @@ class ThemePlanView(APIView):
         try:
             build_theme_plan(deck, overwrite_edited=overwrite, brief=brief)
         except Exception as exc:
-            return Response({"detail": str(exc)}, status=502)
+            return Response({"detail": short_error(exc)}, status=502)
         deck = Deck.objects.prefetch_related("cards__card").get(pk=deck.pk)
         return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request, brief=brief)).data)
 
@@ -133,7 +134,7 @@ class ThemeQuestionsView(APIView):
         try:
             questions = build_theme_questions(deck)
         except Exception as exc:
-            return Response({"detail": str(exc)}, status=502)
+            return Response({"detail": short_error(exc)}, status=502)
         deck.theme_questions = questions
         deck.theme_answers = {}
         deck.theme_answers_updated_at = None
