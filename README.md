@@ -648,3 +648,48 @@ El plan prefiere wikis comunitarias activas fuera de Fandom, como warcraft.wiki.
 cuando existen. Si la franquicia solo está en Fandom, lo mantiene como fuente y el
 usuario pega la referencia manualmente. `find_reference` imprime el status final;
 si hubo bloqueo, muestra el mensaje completo con la URL para diagnosticarlo.
+
+## Elegir una imagen de la página de la wiki
+
+El selector permite revisar las imágenes de la página y escoger una referencia canónica:
+
+```http
+GET /api/cards/12/theme-assignment/wiki-images/
+GET /api/cards/12/theme-assignment/wiki-images/?wiki=warcraft.wiki.gg&page=Lich%20King
+```
+
+Usa por defecto la wiki y la página de la asignación. Devuelve `wiki`, `page` (título
+resuelto), `fandom`, `page_url` e `images`. Cada candidata incluye `file`, `thumb_url`,
+`full_url`, `width`, `height`, `is_page_image` y `maybe_fan_art`. La principal aparece
+primero, seguida por las demás imágenes sin indicios de fan art y luego el fan art;
+dentro de cada grupo se prioriza el área. Se excluyen iconos, SVG, GIF, formatos no
+compatibles e imágenes de menos de 300 px en cualquiera de sus lados. Los resultados
+se guardan en memoria durante diez minutos; se devuelven hasta 40 candidatas.
+
+```http
+POST /api/cards/12/theme-assignment/references/wiki/
+Content-Type: application/json
+
+{"file":"Arthas_Lich_King_WotLK.jpg","wiki":"warcraft.wiki.gg"}
+```
+
+`wiki` es opcional y usa la asignación como valor por defecto. Responde **201 con el
+DeckCard completo**. La referencia queda con `origin:"wiki"`, `source_url` apuntando
+a la página `File:` y la asignación con `edited:true` y `auto_reference_status:"found"`.
+Se aplican el máximo de tres referencias, la detección de duplicados (400) y el
+bloqueo por job activo (409). Las referencias elegidas se conservan al buscar con
+`force` y al cambiar la wiki o la página; solo se reemplazan automáticamente las de
+origen `auto`.
+
+La heurística marca nombres que contienen ` by `, `fanart`, `fan art`, `deviantart`,
+`artstation` o `commission` (ignorando mayúsculas y convirtiendo guiones bajos en
+espacios). Si la principal parece fan art, la búsqueda automática elige la primera
+alternativa sin esa marca y con al menos 600 px en su lado mayor; si no hay ninguna,
+conserva la principal. El mensaje de éxito informa «Se evitó la imagen principal…».
+La verificación visual también rechaza diseños claramente no canónicos. La heurística
+orienta la selección; el usuario puede revisar las candidatas.
+
+Fandom permite listar imágenes, pero bloquea su descarga automática. Si ocurre al
+seleccionar una, el POST devuelve **400** con `detail`, `blocked:true` y `full_url`.
+El front permite abrir esa imagen, copiarla y pegarla con **Ctrl+V** mediante la subida
+manual existente; no se intenta eludir el bloqueo.

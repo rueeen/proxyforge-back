@@ -1,8 +1,10 @@
 from django.urls import path
 
-from .views import RewriteTextsView, CardFramingView, CardAutoFramingView, DeckAutoFramingView, AutoReferencesView, AutoReferenceView, AssignmentReferencesView, ThemeQuestionsView, ThemeAnswersView, ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
+from .views import WikiImagesView, WikiReferenceView, RewriteTextsView, CardFramingView, CardAutoFramingView, DeckAutoFramingView, AutoReferencesView, AutoReferenceView, AssignmentReferencesView, ThemeQuestionsView, ThemeAnswersView, ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
 
 urlpatterns = [
+    path("cards/<int:card_id>/theme-assignment/wiki-images/", WikiImagesView.as_view(), name="wiki-images"),
+    path("cards/<int:card_id>/theme-assignment/references/wiki/", WikiReferenceView.as_view(), name="wiki-reference"),
     path("decks/<int:deck_id>/rewrite-texts/", RewriteTextsView.as_view(), name="rewrite-texts"),
     path("cards/<int:card_id>/framing/", CardFramingView.as_view(), name="card-framing"),
     path("cards/<int:card_id>/framing/auto/", CardAutoFramingView.as_view(), name="card-auto-framing"),
