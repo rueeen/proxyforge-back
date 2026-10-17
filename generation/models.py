@@ -1,4 +1,6 @@
 from django.db import models
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 from decks.models import Card, Deck
 
@@ -43,3 +45,21 @@ class ThemeAssignment(models.Model):
 
     class Meta:
         unique_together = [("deck", "oracle_id")]
+
+
+class ReferenceImage(models.Model):
+    assignment = models.ForeignKey(ThemeAssignment, related_name="references", on_delete=models.CASCADE)
+    image = models.ImageField(upload_to="references/")
+    source_url = models.URLField(blank=True, max_length=1000)
+    sha256 = models.CharField(max_length=64)
+    position = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["position", "id"]
+
+
+@receiver(post_delete, sender=ReferenceImage)
+def delete_reference_file(sender, instance, **kwargs):
+    if instance.image:
+        instance.image.delete(save=False)

@@ -35,6 +35,7 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `IMAGE_PROVIDER` | Principal: `gemini` (predeterminado), `openai` o `grok`. |
 | `IMAGE_FALLBACK_PROVIDER` | Respaldo opcional: `gemini`, `openai` o `grok`; vacío o igual al principal lo desactiva. |
 | `XAI_API_KEY` | Clave de xAI para Grok Imagine. |
+| `XAI_EDIT_MODEL` | Modelo para edición con referencias; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_MODEL` | Modelo de Grok; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_RESOLUTION` | Resolución de Grok: `1k` (predeterminado) o `2k`. |
 | `XAI_IMAGE_QUALITY` | Calidad de Grok: `medium` (predeterminado), `low` o `auto`; solo se envía a modelos `grok-imagine-image-2*`. |
@@ -146,7 +147,7 @@ Tanto creación como detalle y regeneración usan esta forma de `DeckCard`:
     "original_artist": "Christopher Rush", "layout": "normal",
     "power": "", "toughness": "", "loyalty": "", "keywords": [], "card_faces": []
   },
-  "theme_assignment": {"element": "Espina fulminante", "category": "Fenómeno", "visual_brief": "Una espina descarga energía sobre una criatura entre flores", "edited": false},
+  "theme_assignment": {"element": "Espina fulminante", "category": "Fenómeno", "visual_brief": "Una espina descarga energía sobre una criatura entre flores", "edited": false, "references": []},
   "generated_image": {
     "id": 3,
     "image_url": "http://127.0.0.1:8000/media/generated/0123456789abcdef-ab123456.jpg",
@@ -372,3 +373,50 @@ Grok y Gemini reciben 3:4 o 16:9; OpenAI usa respectivamente 1024x1536 o 1536x10
 sus tamaños vertical/horizontal disponibles. Todos los intentos, incluido el
 proveedor de respaldo, usan el mismo formato. Con google-genai 1.38 se envía
 imageConfig mediante HttpOptions.extra_body, sin actualizar dependencias.
+
+
+## Referencias de identidad por carta
+
+Una asignación temática puede tener hasta **3 imágenes de referencia**, para conservar
+el parecido del personaje o elemento en una ilustración nueva. Primero genera el plan
+o define la asignación de esa carta. Puedes cargar una imagen por archivo o por URL:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/references/ \
+  -F 'file=@voljin.png'
+curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/references/ \
+  -H 'Content-Type: application/json' -d '{"url":"https://example.com/voljin.jpg"}'
+curl -X DELETE http://127.0.0.1:8000/api/cards/12/theme-assignment/references/4/
+```
+
+El POST devuelve 201 y el DELETE 200, ambos con el DeckCard actualizado.
+`theme_assignment.references` contiene objetos como:
+
+```json
+[{"id":4,"image_url":"http://127.0.0.1:8000/media/references/archivo.jpg","source_url":"https://example.com/voljin.jpg"}]
+```
+
+La subida requiere una asignación y rechaza imágenes duplicadas, más de tres
+referencias, URLs que no devuelven imagen y entradas inválidas (400). Un job activo
+bloquea las modificaciones (409); borrar una referencia de otra carta devuelve 404.
+Al agregar referencias, la asignación queda `edited:true` para conservarla al rehacer
+el plan. El borrado de un registro también elimina su archivo.
+
+Se admiten JPEG, PNG y WEBP de hasta 10 MB. Se verifican con Pillow, se aplanan sobre
+blanco y se guardan como JPEG RGB, calidad 90 y lado mayor de hasta 1536 px. El hash
+se calcula sobre esos bytes normalizados. Agregar o quitar referencias cambia el
+caché y deja pendiente la carta si no existe una imagen para esa combinación; sin
+referencias las claves anteriores se conservan.
+
+Con referencias se recomienda **`IMAGE_PROVIDER=grok`**. Grok utiliza el endpoint
+JSON `POST https://api.x.ai/v1/images/edits` con `XAI_EDIT_MODEL` (default
+`grok-imagine-image-2.0`), referencias como data URI y el aspecto del mazo. Admite
+respuestas base64 o URL, y reintenta con `image` para una referencia o sin
+`response_format` si la API rechaza esos parámetros. Sin referencias sigue usando
+el SDK de OpenAI para generar imágenes como antes.
+
+Gemini envía las referencias como partes JPEG junto al prompt. **OpenAI las ignora**,
+lo registra en logs y genera solo desde texto. El runner pasa las mismas referencias,
+en orden de posición, al intento completo, al fallback y al proveedor de respaldo.
+El prompt pide conservar identidad, rostro, especie y equipo característico, creando
+una composición nueva en el formato clásico o sin borde seleccionado.

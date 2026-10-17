@@ -118,16 +118,16 @@ class RenderTests(SimpleTestCase):
         Image.new("RGB", (2, 2)).save(stream, format="PNG")
         self.image_bytes = stream.getvalue()
 
-    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
+    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
     def test_full_prompt_success(self, build):
         self.provider.generate.return_value = self.image_bytes
         prompt, image = render_card_image(self.card, "tema", self.provider)
         self.assertEqual(prompt["used_prompt"], "full")
         self.assertEqual(image, self.image_bytes)
-        self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"], aspect_ratio="16:9")
-        build.assert_called_once_with(self.card, "tema", None, None, "classic")
+        self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[])
+        build.assert_called_once_with(self.card, "tema", None, None, "classic", reference_count=0)
 
-    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
+    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
     def test_full_error_or_invalid_image_uses_fallback_once(self, build):
         for first_result in (RuntimeError("policy rejected"), b"not an image"):
             with self.subTest(first_result=first_result):
@@ -138,11 +138,11 @@ class RenderTests(SimpleTestCase):
                 self.assertEqual(prompt["used_prompt"], "fallback")
                 self.assertEqual(image, self.image_bytes)
                 self.assertEqual(self.provider.generate.call_args_list, [
-                    ((valid_prompt()["full_prompt"],), {"aspect_ratio": "16:9"}),
-                    ((valid_prompt()["fallback_prompt"],), {"aspect_ratio": "16:9"}),
+                    ((valid_prompt()["full_prompt"],), {"aspect_ratio": "16:9", "references": []}),
+                    ((valid_prompt()["fallback_prompt"],), {"aspect_ratio": "16:9", "references": []}),
                 ])
 
-    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
+    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
     def test_both_failures_are_reported(self, build):
         second_error = RuntimeError("fallback unavailable")
         self.provider.generate.side_effect = [RuntimeError("full rejected"), second_error]
@@ -152,7 +152,7 @@ class RenderTests(SimpleTestCase):
         self.assertIs(caught.exception.__cause__, second_error)
         self.assertEqual(self.provider.generate.call_count, 2)
 
-    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
+    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
     def test_invalid_fallback_is_not_returned(self, build):
         self.provider.generate.side_effect = [RuntimeError("full rejected"), b"invalid fallback"]
         with self.assertLogs("generation.runner", level="WARNING"):
@@ -240,7 +240,7 @@ class ContractTests(TestCase):
         self.assertEqual(cached.pk, existing.pk)
         render.assert_not_called()
 
-    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
+    @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
     def test_saved_visual_prompt_matches_fallback(self, build):
         image_bytes = self.provider.generate.return_value
         self.provider.generate.side_effect = [RuntimeError("full rejected"), image_bytes]
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0005_deck_card_layout'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
+        after = [('decks', '0005_deck_card_layout'), ('generation', '0004_referenceimage')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

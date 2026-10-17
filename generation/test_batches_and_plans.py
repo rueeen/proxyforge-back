@@ -123,7 +123,7 @@ class BatchAndPlanTests(TestCase):
         data = dict(element='Storm Eagle', category='', visual_brief='Storm Eagle vuela')
         result = self.client.patch(f'/api/cards/{entry.pk}/theme-assignment/', data, content_type='application/json')
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()['theme_assignment'], {**data, 'edited': True})
+        self.assertEqual(result.json()['theme_assignment'], {**data, 'edited': True, 'references': []})
         self.assertIsNone(result.json()['generated_image'])
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.pk}/estimate/').json()['cached'], 0)
         planned = ThemeAssignment.objects.get()
@@ -201,7 +201,7 @@ class BatchAndPlanTests(TestCase):
             item = ThemeAssignment.objects.create(deck=self.deck, **assignment(entry.card, f'Element {i}'))
             self.cached(entry, item)
         url = f'/api/decks/{self.deck.pk}/'
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             result = self.client.get(url)
         self.assertTrue(result.json()['has_theme_plan'])
         self.assertIsNotNone(result.json()['cards'][0]['generated_image'])
@@ -209,7 +209,7 @@ class BatchAndPlanTests(TestCase):
             card = make_card()
             DeckCard.objects.create(deck=self.deck, card=card, raw_name='Extra', quantity=1, section='main')
             ThemeAssignment.objects.create(deck=self.deck, **assignment(card, f'Extra {i}'))
-        with self.assertNumQueries(7):
+        with self.assertNumQueries(8):
             self.client.get(url)
 
     @patch('generation.runner.connection.close')

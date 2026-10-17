@@ -12,6 +12,7 @@ from django.db import connection
 from django.utils import timezone
 
 from .errors import short_error
+from .references import reference_hashes
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
 from .selection import unique_entries, assignment_map, aspect_for_layout
@@ -40,7 +41,12 @@ def _image_extension(image_bytes):
 def render_card_image(card, theme, provider, assignment=None, brief=None, layout="classic") -> tuple[dict, bytes]:
     """Llama a Claude y al proveedor; no toca la base de datos."""
     aspect_ratio = aspect_for_layout(layout)
-    prompt_json = build_visual_prompt(card, theme, assignment, brief, layout)
+    references = []
+    if assignment is not None:
+        for reference in assignment.references.all():
+            with reference.image.open("rb") as image:
+                references.append(image.read())
+    prompt_json = build_visual_prompt(card, theme, assignment, brief, layout, reference_count=len(references))
     fallback_provider = get_fallback_provider()
     attempts = [(provider, "full"), (provider, "fallback")]
     if fallback_provider is not None:
@@ -49,7 +55,7 @@ def render_card_image(card, theme, provider, assignment=None, brief=None, layout
     last_error = None
     for attempt_provider, prompt_type in attempts:
         try:
-            image_bytes = attempt_provider.generate(prompt_json[f"{prompt_type}_prompt"], aspect_ratio=aspect_ratio)
+            image_bytes = attempt_provider.generate(prompt_json[f"{prompt_type}_prompt"], aspect_ratio=aspect_ratio, references=references)
             _image_extension(image_bytes)
         except Exception as error:
             reason = f"{attempt_provider.name}/{prompt_type}: {error}"
@@ -66,7 +72,7 @@ def render_card_image(card, theme, provider, assignment=None, brief=None, layout
 def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=None, brief=None, layout="classic") -> GeneratedImage:
     """Detecta formato, guarda el archivo con nombre único y crea el registro."""
     extension = _image_extension(image_bytes)
-    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout)
+    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout, reference_hashes(assignment))
     prompt_key = "fallback_prompt" if prompt_json["used_prompt"] == "fallback" else "full_prompt"
     generated = GeneratedImage(
         cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json[prompt_key],
@@ -85,7 +91,7 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=
 
 def generate_card_image(card, theme, provider=None, assignment=None, brief=None, layout="classic"):
     provider = provider or get_provider()
-    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout)
+    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout, reference_hashes(assignment))
     existing = GeneratedImage.objects.filter(cache_key=cache_key).first()
     if existing:
         return existing

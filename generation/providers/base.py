@@ -1,7 +1,7 @@
 class ImageProvider:
     name: str
 
-    def generate(self, prompt: str, aspect_ratio: str = "16:9") -> bytes:
+    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None) -> bytes:
         """Devuelve los bytes de la imagen generada (PNG o JPEG)."""
         raise NotImplementedError
 
