@@ -9,6 +9,11 @@ def default_auto_reference_count():
 
 
 
+def default_image_resolution():
+    value = os.getenv('XAI_IMAGE_RESOLUTION', '1k')
+    return value if value in ('1k', '2k') else '1k'
+
+
 class Card(models.Model):
     scryfall_id = models.UUIDField(unique=True)
     oracle_id = models.UUIDField(db_index=True)
@@ -49,6 +54,7 @@ class Deck(models.Model):
     wiki_candidates = models.JSONField(default=list, blank=True)
     auto_reference_count = models.PositiveSmallIntegerField(default=default_auto_reference_count,
         validators=[MinValueValidator(1), MaxValueValidator(3)])
+    image_resolution = models.CharField(max_length=3, choices=[("1k", "1K"), ("2k", "2K")], default=default_image_resolution)
     theme_questions = models.JSONField(default=list, blank=True)
     theme_answers = models.JSONField(default=dict, blank=True)
     theme_answers_updated_at = models.DateTimeField(null=True, blank=True)

@@ -11,7 +11,7 @@ from django.db import DatabaseError
 from django.test import SimpleTestCase, TestCase
 
 from decks.models import Deck, DeckCard
-from .framing import auto_framing, detect_face_center
+from .framing import auto_framing, detect_face_center, apply_auto_framing
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import build_visual_prompt, make_cache_key, PROMPT_VERSION
 from .runner import save_card_image, generate_card_image
@@ -20,7 +20,7 @@ from .tests import make_card, valid_prompt
 
 def png():
     stream = BytesIO()
-    Image.new('RGB', (1024, 1536), 'green').save(stream, format='PNG')
+    Image.new('RGB', (864, 1152), 'green').save(stream, format='PNG')
     return stream.getvalue()
 
 
@@ -30,21 +30,22 @@ def response(data):
 
 class FramingCalculationTests(SimpleTestCase):
     def test_face_positions_and_limits(self):
-        self.assertEqual(auto_framing(0.1, 0.75, 'borderless'), (22, 100))
-        self.assertEqual(auto_framing(0.3, 0.75, 'borderless'), (0, 100))
-        self.assertEqual(auto_framing(0.26, 0.75, 'borderless'), (0, 100))
-        self.assertEqual(auto_framing(0.0, 0.75, 'borderless'), (32, 100))
-        self.assertEqual(auto_framing(-0.05, 0.75, 'borderless'), (35, 100))
-        self.assertEqual(auto_framing(-0.10, 0.75, 'borderless'), (35, 90))
-        self.assertEqual(auto_framing(0.1, 1.5, 'classic'), (0, 100))
-        self.assertEqual(auto_framing(0.1234, 0.75, 'borderless'), (19.7, 100))
+        self.assertEqual(auto_framing(0.5, 0.1, 864, 1152, 'borderless'), (0, 22, 100))
+        self.assertEqual(auto_framing(0.5, 0.3, 864, 1152, 'borderless'), (0, 2, 100))
+        self.assertEqual(auto_framing(0.5, 0.4, 864, 1152, 'borderless'), (0, 0, 100))
+        self.assertEqual(auto_framing(0.5, 0, 864, 1152, 'borderless'), (0, 32, 100))
+        self.assertEqual(auto_framing(0.5, 0.1, 864, 1152, 'classic'), (0, 0, 100))
+        self.assertEqual(auto_framing(0.5, 0.1234, 864, 1152, 'borderless'), (0, 19.7, 100))
+        x, y, zoom = auto_framing(0.2, 0.1, 864, 1152, 'borderless')
+        self.assertGreater(x, 0)
+        self.assertLessEqual(x, round((864 / 1152 / (63 / 88) * 100 - 100) / 2, 1))
 
     @patch('generation.claude_client.Anthropic')
     def test_detect_face_resizes_image_and_uses_vision_model(self, anthropic):
         create = anthropic.return_value.messages.create
-        create.return_value = response({'found': True, 'face_center_y': 0.1, 'face_height': 0.15})
+        create.return_value = response({'found': True, 'face_center_x': 0.5, 'face_center_y': 0.1, 'face_height': 0.15})
         with patch.dict(os.environ, {'ANTHROPIC_VERIFY_MODEL': 'vision-model'}):
-            self.assertEqual(detect_face_center(png()), 0.1)
+            self.assertEqual(detect_face_center(png()), (0.5, 0.1))
         args = create.call_args.kwargs
         self.assertEqual(args['model'], 'vision-model')
         self.assertEqual(args['max_tokens'], 200)
@@ -61,7 +62,7 @@ class FramingCalculationTests(SimpleTestCase):
         with self.assertLogs('generation.framing', level='WARNING'):
             self.assertIsNone(detect_face_center(png()))
         for value in (-0.1, 1.1, True, float('nan')):
-            create.return_value = response({'found': True, 'face_center_y': value, 'face_height': 0.1})
+            create.return_value = response({'found': True, 'face_center_x': 0.5, 'face_center_y': value, 'face_height': 0.1})
             with self.subTest(value=value), self.assertLogs('generation.framing', level='WARNING'):
                 self.assertIsNone(detect_face_center(png()))
         create.side_effect = RuntimeError('Claude unavailable')
@@ -101,17 +102,35 @@ class FramingTests(TestCase):
     def save(self, card=None, layout='borderless'):
         return save_card_image(card or self.card, 'theme', self.provider, self.prompt, png(), layout=layout)
 
-    @patch('generation.framing.detect_face_center', return_value=0.1)
+    @patch('generation.framing.detect_face_center', return_value=(0.5, 0.1))
     def test_persistence_and_serializer_fields(self, detect):
         image = self.save()
         image.refresh_from_db()
         self.assertEqual((image.face_center_y, image.framing_offset_y, image.framing_zoom, image.framing_source), (0.1, 22, 100, 'auto'))
         data = self.client.get(f'/api/decks/{self.deck.id}/').json()['cards'][0]['generated_image']
+        self.assertEqual((data['framing_offset_x'], data['width'], data['height'], data['face_center_x']), (0, 864, 1152, 0.5))
         self.assertEqual((data['face_center_y'], data['framing_source'], data['framing_offset_y'], data['framing_zoom']), (0.1, 'auto', 22, 100))
         detect.reset_mock()
         classic = self.save(layout='classic')
         detect.assert_not_called()
         self.assertEqual((classic.framing_source, classic.framing_offset_y, classic.framing_zoom), ('default', 0, 100))
+
+    @patch('generation.framing.detect_face_center', return_value=(0.2, 0.1))
+    def test_auto_reads_missing_dimensions_and_centers_horizontally(self, detect):
+        image = self.save()
+        GeneratedImage.objects.filter(pk=image.pk).update(width=None, height=None)
+        image.refresh_from_db()
+        apply_auto_framing(image, 'borderless')
+        image.refresh_from_db()
+        self.assertEqual((image.width, image.height, image.face_center_x), (864, 1152, 0.2))
+        self.assertGreater(image.framing_offset_x, 0)
+        GeneratedImage.objects.filter(pk=image.pk).update(width=None, height=None)
+        image.refresh_from_db()
+        detect.reset_mock()
+        apply_auto_framing(image, 'classic')
+        self.assertEqual((image.width, image.height), (864, 1152))
+        self.assertEqual((image.framing_offset_x, image.framing_offset_y, image.framing_zoom), (0, 0, 100))
+        detect.assert_not_called()
 
     @patch('generation.framing.detect_face_center')
     def test_flag_disabled_and_no_face_defaults(self, detect):
@@ -130,7 +149,7 @@ class FramingTests(TestCase):
         self.assertTrue(GeneratedImage.objects.filter(pk=image.pk).exists())
         self.assertTrue(image.image.storage.exists(image.image.name))
 
-    @patch('generation.framing.detect_face_center', return_value=0.1)
+    @patch('generation.framing.detect_face_center', return_value=(0.5, 0.1))
     @patch('django.db.models.query.QuerySet.update', side_effect=DatabaseError('framing write failed'))
     def test_failed_framing_update_does_not_discard_image(self, update, detect):
         with self.assertLogs('generation.framing', level='WARNING'):
@@ -139,18 +158,20 @@ class FramingTests(TestCase):
         self.assertEqual(image.framing_source, 'default')
         self.assertTrue(image.image.storage.exists(image.image.name))
 
-    @patch('generation.framing.detect_face_center', return_value=0.1)
+    @patch('generation.framing.detect_face_center', return_value=(0.5, 0.1))
     def test_manual_framing_clamps_and_preserves_unspecified_fields(self, detect):
         image = self.save()
-        result = self.client.patch(self.url, {'offset_y': 100, 'zoom': 10}, content_type='application/json')
+        result = self.client.patch(self.url, {'offset_x': 99, 'offset_y': 100, 'zoom': 10}, content_type='application/json')
         self.assertEqual(result.status_code, 200)
         data = result.json()['generated_image']
-        self.assertEqual((data['framing_offset_y'], data['framing_zoom'], data['framing_source']), (35, 70, 'manual'))
-        result = self.client.patch(self.url, {'offset_y': -99, 'zoom': 999}, content_type='application/json')
-        self.assertEqual((result.json()['generated_image']['framing_offset_y'], result.json()['generated_image']['framing_zoom']), (-20, 160))
+        self.assertEqual(data['framing_offset_x'], 60)
+        self.assertEqual((data['framing_offset_y'], data['framing_zoom'], data['framing_source']), (60, 50, 'manual'))
+        result = self.client.patch(self.url, {'offset_x': -999, 'offset_y': -99, 'zoom': 999}, content_type='application/json')
+        self.assertEqual((result.json()['generated_image']['framing_offset_y'], result.json()['generated_image']['framing_zoom']), (-60, 300))
+        self.assertEqual(result.json()['generated_image']['framing_offset_x'], -60)
         self.client.patch(self.url, {'offset_y': 12.5}, content_type='application/json')
         image.refresh_from_db()
-        self.assertEqual((image.framing_offset_y, image.framing_zoom), (12.5, 160))
+        self.assertEqual((image.framing_offset_x, image.framing_offset_y, image.framing_zoom), (-60, 12.5, 300))
 
     def test_missing_art_and_invalid_numbers(self):
         result = self.client.patch(self.url, {'offset_y': 1}, content_type='application/json')
@@ -158,11 +179,11 @@ class FramingTests(TestCase):
         self.assertEqual(self.client.post(self.url + 'auto/').status_code, 404)
         with patch('generation.framing.detect_face_center', return_value=None):
             self.save()
-        for body in ({'zoom': 'bad'}, {'offset_y': None}, {'zoom': True}, {'offset_y': '12'}):
+        for body in ({'zoom': 'bad'}, {'offset_y': None}, {'offset_x': True}, {'offset_x': '12'}, {'zoom': True}, {'offset_y': '12'}):
             with self.subTest(body=body):
                 self.assertEqual(self.client.patch(self.url, body, content_type='application/json').status_code, 400)
 
-    @patch('generation.framing.detect_face_center', return_value=0.1)
+    @patch('generation.framing.detect_face_center', return_value=(0.5, 0.1))
     def test_auto_endpoint_overrides_manual_and_resets_on_no_face(self, detect):
         image = self.save()
         self.client.patch(self.url, {'offset_y': -10}, content_type='application/json')
@@ -185,7 +206,7 @@ class FramingTests(TestCase):
         GeneratedImage.objects.filter(pk=images[0].pk).update(framing_source='manual', framing_offset_y=12)
         DeckCard.objects.create(deck=self.deck, card=self.card, raw_name='Duplicate', quantity=2, section='main')
         detect.reset_mock()
-        detect.side_effect = [0.1, 0.3, None]
+        detect.side_effect = [(0.5, 0.1), (0.5, 0.4), None]
         url = f'/api/decks/{self.deck.id}/framing/auto/'
         result = self.client.post(url)
         self.assertEqual(result.status_code, 200)
@@ -196,7 +217,7 @@ class FramingTests(TestCase):
         GenerationJob.objects.create(deck=self.deck, total_cards=1)
         self.assertEqual(self.client.post(url).status_code, 409)
 
-    @patch('generation.framing.detect_face_center', return_value=0.3)
+    @patch('generation.framing.detect_face_center', return_value=(0.5, 0.4))
     @patch('generation.runner.build_visual_prompt', return_value=valid_prompt())
     @patch('generation.views.get_provider')
     def test_regeneration_does_not_inherit_manual_framing(self, provider, prompt, detect):

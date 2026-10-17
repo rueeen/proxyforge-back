@@ -40,7 +40,7 @@ def _image_extension(image_bytes):
     return extension
 
 
-def render_card_image(card, theme, provider, assignment=None, brief=None, layout="classic") -> tuple[dict, bytes]:
+def render_card_image(card, theme, provider, assignment=None, brief=None, layout="classic", resolution=None) -> tuple[dict, bytes]:
     """Llama a Claude y al proveedor; no toca la base de datos."""
     aspect_ratio = aspect_for_layout(layout)
     references = []
@@ -57,7 +57,7 @@ def render_card_image(card, theme, provider, assignment=None, brief=None, layout
     last_error = None
     for attempt_provider, prompt_type in attempts:
         try:
-            image_bytes = attempt_provider.generate(prompt_json[f"{prompt_type}_prompt"], aspect_ratio=aspect_ratio, references=references)
+            image_bytes = attempt_provider.generate(prompt_json[f"{prompt_type}_prompt"], aspect_ratio=aspect_ratio, references=references, resolution=resolution)
             _image_extension(image_bytes)
         except Exception as error:
             reason = f"{attempt_provider.name}/{prompt_type}: {error}"
@@ -76,7 +76,10 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=
     extension = _image_extension(image_bytes)
     cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout, reference_hashes(assignment))
     prompt_key = "fallback_prompt" if prompt_json["used_prompt"] == "fallback" else "full_prompt"
+    with Image.open(BytesIO(image_bytes)) as image:
+        width, height = image.size
     generated = GeneratedImage(
+        width=width, height=height,
         cache_key=cache_key, card=card, theme=theme, visual_prompt=prompt_json[prompt_key],
         prompt_json=prompt_json, provider=prompt_json["used_provider"], prompt_version=PROMPT_VERSION,
     )
@@ -96,13 +99,13 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=
     return generated
 
 
-def generate_card_image(card, theme, provider=None, assignment=None, brief=None, layout="classic"):
+def generate_card_image(card, theme, provider=None, assignment=None, brief=None, layout="classic", resolution=None):
     provider = provider or get_provider()
     cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout, reference_hashes(assignment))
     existing = GeneratedImage.objects.filter(cache_key=cache_key).first()
     if existing:
         return existing
-    prompt_json, image_bytes = render_card_image(card, theme, provider, assignment, brief, layout)
+    prompt_json, image_bytes = render_card_image(card, theme, provider, assignment, brief, layout, resolution=resolution)
     return save_card_image(card, theme, provider, prompt_json, image_bytes, assignment, brief, layout)
 
 
@@ -132,7 +135,7 @@ def run_job(job_id):
                         fetch_auto_reference(assignment)
                     except Exception:
                         logger.warning("No se pudo buscar referencia para %s; generando sin ella", card.name, exc_info=True)
-                generate_card_image(card, job.deck.theme, provider, assignment, brief, job.deck.card_layout)
+                generate_card_image(card, job.deck.theme, provider, assignment, brief, job.deck.card_layout, resolution=job.deck.image_resolution)
                 job.completed_cards += 1
             except Exception as exc:  # Continue so one provider failure does not abort the deck.
                 logger.exception("No se pudo generar arte para %s", card.name)

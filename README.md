@@ -42,7 +42,8 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `AUTO_REFERENCES_IN_JOBS` | Busca referencias pendientes antes de generar cada carta; predeterminado `true`. |
 | `XAI_EDIT_MODEL` | Modelo para edición con referencias; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_MODEL` | Modelo de Grok; predeterminado `grok-imagine-image-2.0`. |
-| `XAI_IMAGE_RESOLUTION` | Resolución de Grok: `1k` (predeterminado) o `2k`. |
+| `XAI_IMAGE_RESOLUTION` | Resolución inicial de cada mazo: `1k` (predeterminado) o `2k`. |
+| `COST_2K_EXTRA_USD` | Extra estimado por imagen pendiente de un mazo en 2K; predeterminado `0.02`. |
 | `XAI_IMAGE_QUALITY` | Calidad de Grok: `medium` (predeterminado), `low` o `auto`; solo se envía a modelos `grok-imagine-image-2*`. |
 | `PLAN_PARALLEL_BATCHES` | Llamadas simultáneas para los lotes del plan; predeterminado `3`. |
 | `PLAN_BATCH_SIZE` | Cartas por lote del plan; predeterminado `20`. |
@@ -373,7 +374,7 @@ curl -X PATCH http://127.0.0.1:8000/api/decks/1/ \
   -H 'Content-Type: application/json' -d '{"card_layout":"borderless"}'
 ```
 
-El PATCH acepta `card_layout` (`borderless` o `classic`) y `auto_reference_count` (entero de 1 a 3), y devuelve el detalle.
+El PATCH acepta `card_layout` (`borderless` o `classic`), `auto_reference_count` (entero de 1 a 3) e `image_resolution` (`1k` o `2k`), y devuelve el detalle.
 Otros campos responden 400;
 un formato inválido devuelve 400 y un job activo devuelve 409.
 
@@ -525,21 +526,23 @@ imágenes ya cacheadas se conservan.
 Cada `generated_image` del DeckCard incluye:
 
 ```json
-{"framing_offset_y":22.0,"framing_zoom":100.0,"framing_source":"auto","face_center_y":0.1}
+{"framing_offset_x":0.0,"framing_offset_y":22.0,"framing_zoom":100.0,"framing_source":"auto","face_center_x":0.5,"face_center_y":0.1,"width":864,"height":1152}
 ```
 
-`framing_offset_y` desplaza la imagen verticalmente en porcentaje del alto de la
-carta (positivo hacia abajo), entre −20 y +35. `framing_zoom` va de 70 a 160, con 100
-como tamaño cover normal. `framing_source` es `default`, `auto` o `manual`.
-`face_center_y` es la posición detectada en la imagen original, entre 0 y 1, o null.
-El frontend aplica las transformaciones CSS y rellena los huecos con una copia
-difuminada de la misma imagen; el backend conserva el archivo de arte original.
+Los desplazamientos `framing_offset_x` y `framing_offset_y` mueven el **centro de la
+imagen respecto del centro de la carta**, en porcentaje del ancho y del alto de la
+carta. Ambos van de −60 a +60; positivo significa derecha y abajo. `framing_zoom`
+va de 50 a 300; 100 es el tamaño «cover» que cubre la carta de proporción 63/88.
+El front calcula ese tamaño con `width` y `height`, aplica el zoom y los desplazamientos
+centrados. `framing_source` vale `default`, `auto` o `manual`. Las coordenadas de rostro
+`face_center_x` y `face_center_y` van de 0 a 1 en la imagen original, o son null si no
+se detectó rostro. El backend conserva el archivo de arte sin recortarlo.
 
-Ajustar una imagen actual, con ambos campos opcionales:
+Ajustar una imagen actual, con los tres campos opcionales:
 
 ```bash
 curl -X PATCH http://127.0.0.1:8000/api/cards/12/framing/ \
-  -H 'Content-Type: application/json' -d '{"offset_y":12.5,"zoom":105}'
+  -H 'Content-Type: application/json' -d '{"offset_x":-5,"offset_y":12.5,"zoom":120}'
 curl -X POST http://127.0.0.1:8000/api/cards/12/framing/auto/
 curl -X POST http://127.0.0.1:8000/api/decks/1/framing/auto/
 ```
@@ -547,7 +550,7 @@ curl -X POST http://127.0.0.1:8000/api/decks/1/framing/auto/
 El PATCH recorta los números a sus límites, marca `manual` y devuelve el DeckCard.
 Un valor no numérico devuelve 400; si la entrada no tiene arte actual, los endpoints
 por carta devuelven 404 con `{"detail":"La carta no tiene arte generado."}`.
-El POST por carta recalcula incluso un ajuste manual; sin rostro restaura `(0,100)`
+El POST por carta recalcula incluso un ajuste manual; sin rostro restaura `(0,0,100)`
 y `default`. El POST por mazo omite los ajustes manuales, procesa cada imagen actual
 una sola vez y devuelve el detalle más
 `framing_summary: {"adjusted":0,"unchanged":0,"no_face":0}`. Un job activo devuelve 409.
@@ -558,12 +561,16 @@ o `ANTHROPIC_MODEL` si el primero está vacío). La copia enviada es JPEG con la
 mayor de 768 px. Las imágenes clásicas mantienen el encuadre por defecto y no usan
 esta llamada. Un error de detección o persistencia del encuadre no elimina el arte.
 
-Si el rostro está por encima del 26% del alto, el auto-encuadre lo desplaza hacia el
-32%, con zoom 100 y tope +35; si está al 26% o más, no desplaza la imagen. Por ejemplo,
-un rostro al 10% recibe +22 y uno al 0% recibe +32. El zoom 90 queda como respaldo
-para posiciones defensivas fuera de rango que aún no alcancen la zona segura con
-el desplazamiento máximo. Al regenerar, la imagen nueva recibe su propio encuadre,
-sin heredar el manual anterior. Estos valores no cambian la clave de caché.
+El auto-encuadre usa zoom 100 y el tamaño cover real: intenta colocar el rostro al
+32% del alto y centrarlo horizontalmente. Limita el desplazamiento horizontal al
+excedente de imagen para evitar huecos laterales. Si la corrección vertical es
+negativa y el rostro ya queda al 26% o más abajo sin desplazar, deja Y en cero.
+Por ejemplo, en una imagen 864×1152 con rostro en (0.5, 0.1), da (0, 22, 100).
+El formato clásico mantiene (0, 0, 100). Al regenerar, la nueva imagen recibe su propio
+encuadre, sin heredar el manual anterior. Estos valores no cambian la clave de caché.
+La migración rellena las dimensiones desde los archivos y convierte el encuadre
+anterior con `offset_y + (zoom / 100 - 1) * 50`, limitado a ±60; los archivos ausentes
+conservan dimensiones null y el zoom anterior se mantiene.
 
 
 ## Idioma de las cartas y reescritura sin regenerar arte
@@ -853,3 +860,66 @@ de progreso actualiza `updated_at`. Si el servidor se reinicia, el mecanismo exi
 de `STALE_JOB_MINUTES` también expira los jobs de plan y referencias. Un job de imágenes
 que necesite crear el plan utiliza el mismo planner paralelo y muestra sus etapas antes
 de «Generando <nombre de carta> (X de Y)».
+
+## Resolución de imagen por mazo
+
+El detalle incluye `image_resolution`. Su valor inicial proviene de
+`XAI_IMAGE_RESOLUTION` o de `1k`; la migración aplica ese valor también a los mazos
+existentes. Se cambia mediante:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/decks/1/ \
+  -H 'Content-Type: application/json' -d '{"image_resolution":"2k"}'
+```
+
+Grok recibe la resolución del mazo tanto al generar como al editar con referencias,
+con prioridad sobre el entorno. Gemini y OpenAI aceptan el parámetro y lo ignoran.
+La resolución **no forma parte de la cache_key**: cambiarla conserva las imágenes
+actuales; regenera las cartas que quieras producir en 2K. Las dimensiones reales de
+cada archivo aparecen en `generated_image.width` y `generated_image.height`.
+
+El estimado agrega `COST_2K_EXTRA_USD=0.02` por cada imagen pendiente cuando el mazo
+está en `2k`, tanto al total como al costo de la tanda. Es adicional al precio base
+y al costo de las referencias. El valor corresponde a la diferencia orientativa de
+USD 0,06 a USD 0,08 de Grok a calidad media; ajusta las variables a tu tarifa.
+
+## Subida de referencias descargadas por el navegador
+
+Cuando el navegador puede descargar una imagen que el backend no puede obtener,
+el front puede subir sus bytes mediante este endpoint. El backend recibe archivos;
+no vuelve a descargar las URLs de origen.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/references/browser/ \
+  -F 'mode=pick' -F 'files=@arthas.png' \
+  -F 'source_urls=https://static.wikia.nocookie.net/ejemplo/arthas.png'
+```
+
+Recibe `multipart/form-data` con `mode` (`pick` o `auto`), entre uno y seis archivos
+en el campo repetido `files`, y `source_urls` opcional. Las URLs se envían como campo
+repetido alineado con los archivos, o como un array JSON serializado. Si se omiten,
+se guardan vacías. Cada archivo debe ser una imagen JPEG, PNG o WEBP válida de hasta
+10 MB; todas se normalizan con la misma lógica de las referencias actuales.
+
+- **pick:** guarda solo el primer archivo con `origin:"wiki"`, sin verificación de
+  Claude. Marca `edited:true`, estado `found` y mensaje «Elegida desde el navegador».
+- **auto:** deduplica las imágenes y verifica todas las candidatas en una única
+  llamada a Claude. Reemplaza las referencias `auto` previas y guarda las aceptadas
+  según `best_order`, conservando manuales y elegidas de la wiki. Usa el mismo objetivo
+  que la búsqueda automática: `min(auto_reference_count, 3 - manuales - wiki)`. Marca
+  `found` con «Se agregaron N referencias (descargadas por el navegador)», o `rejected`
+  con el motivo si todas se rechazan. No marca la asignación como editada.
+
+Ejemplo de varias imágenes:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/references/browser/ \
+  -F 'mode=auto' -F 'files=@rostro.jpg' -F 'files=@cuerpo.jpg' \
+  -F 'source_urls=["https://cdn.example/rostro.jpg","https://cdn.example/cuerpo.jpg"]'
+```
+
+Responde **201 con el DeckCard completo**, incluso si la verificación deja el estado
+`rejected`. Los archivos inválidos, URLs mal alineadas, duplicados sin candidatas
+nuevas, falta de asignación o límite de tres alcanzado devuelven 400 con `detail`.
+Un job activo del mazo devuelve 409. La subida manual y el pegado con Ctrl+V existentes
+siguen disponibles cuando el navegador no puede descargar la imagen.

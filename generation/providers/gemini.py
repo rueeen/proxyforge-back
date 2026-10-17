@@ -9,7 +9,7 @@ from .base import ImageProvider, validate_aspect_ratio
 class GeminiProvider(ImageProvider):
     name = "gemini"
 
-    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None) -> bytes:
+    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None, resolution=None) -> bytes:
         validate_aspect_ratio(aspect_ratio)
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         if hasattr(types, "ImageConfig"):

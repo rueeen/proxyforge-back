@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class OpenAIProvider(ImageProvider):
     name = "openai"
 
-    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None) -> bytes:
+    def generate(self, prompt: str, aspect_ratio: str = "16:9", references=None, resolution=None) -> bytes:
         validate_aspect_ratio(aspect_ratio)
         if references:
             logger.info("OpenAI ignora las imágenes de referencia; generando solo con texto")

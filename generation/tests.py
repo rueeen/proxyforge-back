@@ -124,7 +124,7 @@ class RenderTests(SimpleTestCase):
         prompt, image = render_card_image(self.card, "tema", self.provider)
         self.assertEqual(prompt["used_prompt"], "full")
         self.assertEqual(image, self.image_bytes)
-        self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[])
+        self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[], resolution=None)
         build.assert_called_once_with(self.card, "tema", None, None, "classic", reference_count=0)
 
     @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
@@ -138,8 +138,8 @@ class RenderTests(SimpleTestCase):
                 self.assertEqual(prompt["used_prompt"], "fallback")
                 self.assertEqual(image, self.image_bytes)
                 self.assertEqual(self.provider.generate.call_args_list, [
-                    ((valid_prompt()["full_prompt"],), {"aspect_ratio": "16:9", "references": []}),
-                    ((valid_prompt()["fallback_prompt"],), {"aspect_ratio": "16:9", "references": []}),
+                    ((valid_prompt()["full_prompt"],), {"aspect_ratio": "16:9", "references": [], "resolution": None}),
+                    ((valid_prompt()["fallback_prompt"],), {"aspect_ratio": "16:9", "references": [], "resolution": None}),
                 ])
 
     @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
@@ -193,7 +193,7 @@ class ContractTests(TestCase):
         self.assertEqual(data['active_job']['id'], job.id)
         self.assertEqual(data['card_count'], 4)
         summary = data['cards'][0]['generated_image']
-        self.assertEqual(set(summary), {'id', 'image_url', 'theme', 'concept_source', 'themed_name', 'themed_flavor', 'frame_style', 'created_at', 'framing_offset_y', 'framing_zoom', 'framing_source', 'face_center_y'})
+        self.assertEqual(set(summary), {'id', 'image_url', 'theme', 'concept_source', 'themed_name', 'themed_flavor', 'frame_style', 'created_at', 'framing_offset_y', 'framing_zoom', 'framing_source', 'face_center_y', 'framing_offset_x', 'width', 'height', 'face_center_x'})
         self.assertEqual(summary['themed_name'], valid_prompt()['themed_name'])
         self.assertEqual(data['cards'][0]['card']['power'], '')
         for _ in range(10):
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0006_deck_auto_reference_count_deck_reference_wiki_and_more'), ('generation', '0010_generationjob_kind_generationjob_options_and_more')]
+        after = [('decks', '0007_deck_image_resolution'), ('generation', '0011_generatedimage_face_center_x_and_more')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

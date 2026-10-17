@@ -26,6 +26,10 @@ class GenerationJob(models.Model):
 
 
 class GeneratedImage(models.Model):
+    framing_offset_x = models.FloatField(default=0)
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
+    face_center_x = models.FloatField(null=True, blank=True)
     framing_offset_y = models.FloatField(default=0)
     framing_zoom = models.FloatField(default=100)
     framing_source = models.CharField(max_length=10, choices=[("default", "Por defecto"), ("auto", "Automático"), ("manual", "Manual")], default="default")

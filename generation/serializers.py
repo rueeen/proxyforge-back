@@ -45,7 +45,8 @@ class GeneratedImageSummarySerializer(GeneratedImageSerializer):
         model = GeneratedImage
         fields = ["id", "image_url", "theme", "concept_source", "themed_name",
                   "themed_flavor", "frame_style", "created_at",
-                  "framing_offset_y", "framing_zoom", "framing_source", "face_center_y"]
+                  "framing_offset_y", "framing_zoom", "framing_source", "face_center_y",
+                  "framing_offset_x", "width", "height", "face_center_x"]
 
     def get_concept_source(self, obj):
         return obj.prompt_json.get("concept_source", "")
