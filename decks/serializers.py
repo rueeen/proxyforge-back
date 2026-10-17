@@ -39,7 +39,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
     def get_generated_image(self, obj):
         if not obj.card_id:
             return None
-        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"))
+        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"), obj.deck.card_layout)
         generated = self.context.get("generated_images", {}).get(key)
         if not generated:
             return None
@@ -77,7 +77,7 @@ class DeckDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Deck
-        fields = ["id", "name", "raw_list", "theme", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
+        fields = ["id", "name", "raw_list", "theme", "card_layout", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
                   "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale"]
 
 
@@ -86,13 +86,13 @@ class DeckListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Deck
-        fields = ["id", "name", "theme", "created_at", "card_count"]
+        fields = ["id", "name", "theme", "card_layout", "created_at", "card_count"]
 
 
 class DeckCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Deck
-        fields = ["name", "raw_list", "theme"]
+        fields = ["name", "raw_list", "theme", "card_layout"]
 
 
 def deck_detail_context(deck, request, brief=None):
@@ -101,7 +101,7 @@ def deck_detail_context(deck, request, brief=None):
     assignments = assignment_map(deck)
     if brief is None:
         brief = deck_brief(deck)
-    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id), brief)
+    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id), brief, deck.card_layout)
             for entry in deck.cards.all() if entry.card_id]
     return {
         "request": request,
@@ -110,3 +110,10 @@ def deck_detail_context(deck, request, brief=None):
         "generated_images": {image.cache_key: image for image in GeneratedImage.objects.filter(cache_key__in=keys)},
         "active_job": deck.jobs.filter(status__in=["pending", "running"]).order_by("-id").first(),
     }
+
+
+class DeckLayoutSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Deck
+        fields = ["card_layout"]
+        extra_kwargs = {"card_layout": {"required": True}}

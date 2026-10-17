@@ -124,8 +124,8 @@ class RenderTests(SimpleTestCase):
         prompt, image = render_card_image(self.card, "tema", self.provider)
         self.assertEqual(prompt["used_prompt"], "full")
         self.assertEqual(image, self.image_bytes)
-        self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"])
-        build.assert_called_once_with(self.card, "tema")
+        self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"], aspect_ratio="16:9")
+        build.assert_called_once_with(self.card, "tema", None, None, "classic")
 
     @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
     def test_full_error_or_invalid_image_uses_fallback_once(self, build):
@@ -138,8 +138,8 @@ class RenderTests(SimpleTestCase):
                 self.assertEqual(prompt["used_prompt"], "fallback")
                 self.assertEqual(image, self.image_bytes)
                 self.assertEqual(self.provider.generate.call_args_list, [
-                    ((valid_prompt()["full_prompt"],), {}),
-                    ((valid_prompt()["fallback_prompt"],), {}),
+                    ((valid_prompt()["full_prompt"],), {"aspect_ratio": "16:9"}),
+                    ((valid_prompt()["fallback_prompt"],), {"aspect_ratio": "16:9"}),
                 ])
 
     @patch("generation.runner.build_visual_prompt", side_effect=lambda *args: valid_prompt())
@@ -170,7 +170,7 @@ class ContractTests(TestCase):
         settings = override_settings(MEDIA_ROOT=self.directory.name)
         settings.enable()
         self.addCleanup(settings.disable)
-        self.deck = Deck.objects.create(name='Deck', raw_list='Tree', theme='botánica')
+        self.deck = Deck.objects.create(card_layout="classic", name='Deck', raw_list='Tree', theme='botánica')
         self.card = make_card()
         self.entry = DeckCard.objects.create(deck=self.deck, card=self.card, raw_name='Tree', quantity=4, section='main')
         self.provider = Mock(name='provider')
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
+        after = [('decks', '0005_deck_card_layout'), ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

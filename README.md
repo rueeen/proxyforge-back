@@ -159,7 +159,7 @@ Tanto creación como detalle y regeneración usan esta forma de `DeckCard`:
 ```
 
 `card` es null si la entrada no se resolvió; `generated_image` es null si no existe
-una imagen para oracle_id, tema, proveedor y asignación actuales.
+una imagen para oracle_id, tema, proveedor, asignación y formato actuales.
 `theme_assignment` es null si no hay asignación o si la entrada no está resuelta. Las caras incluyen name,
 mana_cost, type_line, oracle_text, flavor_text, power, toughness y loyalty; los campos
 faltantes son cadenas vacías. Las cartas de una cara tienen `card_faces: []`.
@@ -332,3 +332,43 @@ truncamiento usa el reintento de corrección habitual. Si ambos intentos fallan,
 API y el job muestran un mensaje corto; las respuestas fallidas se registran solo en
 logs, hasta 2000 caracteres cada una. Los errores de generación se limitan a 500
 caracteres. El contrato de la API, PROMPT_VERSION v3 y las claves de caché se mantienen.
+
+
+## Formato de carta: sin borde o clásico
+
+Los mazos nuevos usan `card_layout:"borderless"` por defecto: ilustración vertical
+3:4 a sangre completa, con el sujeto entre el 12% y el 60% del alto. El 10% superior
+y el 40% inferior dejan espacio visual para las placas translúcidas del frontend;
+la imagen generada sigue sin incluir texto ni marcos. Los prompts describen los
+rasgos anatómicos y variantes de época de cada especie para evitar confusiones
+como troll/orco; el planner pide comprobar facción, tribu y raza canónicas.
+
+Los mazos existentes conservan `card_layout:"classic"` mediante la migración y
+mantienen su arte horizontal 16:9. El campo aparece en listado y detalle. Al crear
+un mazo se puede elegir explícitamente:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/ \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Warcraft","raw_list":"1 Sol Ring","theme":"Warcraft","card_layout":"borderless"}'
+```
+
+Cambiar el formato de un mazo:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/decks/1/ \
+  -H 'Content-Type: application/json' -d '{"card_layout":"borderless"}'
+```
+
+El PATCH solo acepta `card_layout` (`borderless` o `classic`) y devuelve el detalle.
+Otros campos responden 400 con `{"detail":"Solo se puede modificar card_layout."}`;
+un formato inválido devuelve 400 y un job activo devuelve 409.
+
+Cambiar a sin borde deja pendientes las cartas que no tengan arte vertical. Genera
+las tandas para ese formato; volver a clásico recupera las imágenes horizontales
+cacheadas. Se conservan las claves de caché clásicas y PROMPT_VERSION sigue en v3.
+
+Grok y Gemini reciben 3:4 o 16:9; OpenAI usa respectivamente 1024x1536 o 1536x1024,
+sus tamaños vertical/horizontal disponibles. Todos los intentos, incluido el
+proveedor de respaldo, usan el mismo formato. Con google-genai 1.38 se envía
+imageConfig mediante HttpOptions.extra_body, sin actualizar dependencias.

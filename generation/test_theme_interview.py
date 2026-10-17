@@ -63,7 +63,7 @@ class CategoryTests(SimpleTestCase):
 @patch.dict(os.environ, {'IMAGE_PROVIDER': 'gemini', 'IMAGE_FALLBACK_PROVIDER': ''})
 class InterviewTests(TestCase):
     def setUp(self):
-        self.deck = Deck.objects.create(name='Warcraft', theme='Warcraft', raw_list='', theme_questions=stored_questions())
+        self.deck = Deck.objects.create(card_layout="classic", name='Warcraft', theme='Warcraft', raw_list='', theme_questions=stored_questions())
         self.card = make_card(name='Commander', type_line='Legendary Creature — Vampire', color_identity=['B', 'R'])
         self.entry = DeckCard.objects.create(deck=self.deck, card=self.card, raw_name='Commander', quantity=1, section='commander')
 
@@ -316,7 +316,7 @@ class InterviewTests(TestCase):
             provider.generate.return_value = stream.getvalue()
             image = generate_card_image(self.card, self.deck.theme, provider, brief=brief)
             self.assertEqual(image.cache_key, make_cache_key(self.card.oracle_id, self.deck.theme, 'gemini', brief=brief))
-            build.assert_called_once_with(self.card, self.deck.theme, None, brief)
+            build.assert_called_once_with(self.card, self.deck.theme, None, brief, 'classic')
             with patch('generation.runner.render_card_image') as render:
                 self.assertEqual(generate_card_image(self.card, self.deck.theme, provider, brief=brief).pk, image.pk)
             render.assert_not_called()

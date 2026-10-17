@@ -34,6 +34,7 @@ class Deck(models.Model):
     name = models.CharField(max_length=200)
     raw_list = models.TextField()
     theme = models.TextField()
+    card_layout = models.CharField(max_length=20, choices=[("borderless", "Sin borde"), ("classic", "Clásico")], default="borderless")
     theme_questions = models.JSONField(default=list, blank=True)
     theme_answers = models.JSONField(default=dict, blank=True)
     theme_answers_updated_at = models.DateTimeField(null=True, blank=True)

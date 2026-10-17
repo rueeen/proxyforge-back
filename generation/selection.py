@@ -33,7 +33,7 @@ def pending_entries(deck):
     entries = unique_entries(deck)
     assignments = assignment_map(deck)
     keys = {row.card.oracle_id: make_cache_key(row.card.oracle_id, deck.theme, get_provider_name(),
-                                             assignments.get(row.card.oracle_id), brief) for row in entries}
+                                             assignments.get(row.card.oracle_id), brief, deck.card_layout) for row in entries}
     cached = set(GeneratedImage.objects.filter(cache_key__in=keys.values()).values_list('cache_key', flat=True))
     return entries, [row for row in entries if keys[row.card.oracle_id] not in cached]
 
@@ -72,3 +72,11 @@ def card_category(type_line):
         if words & names:
             return category
     return None
+
+
+def aspect_for_layout(layout):
+    if layout == "borderless":
+        return "3:4"
+    if layout == "classic":
+        return "16:9"
+    raise ValueError("Formato de carta no compatible")

@@ -61,14 +61,14 @@ class RegenerateCardView(APIView):
         theme = deck_card.deck.theme
         try:
             provider = get_provider()
-            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief)
-            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief)
+            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief, deck_card.deck.card_layout)
+            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief, deck_card.deck.card_layout)
             with transaction.atomic():
                 old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
                 old_file = old.image if old else None
                 if old:
                     old.delete()
-                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment, brief)
+                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment, brief, deck_card.deck.card_layout)
                 if old_file:
                     transaction.on_commit(lambda: old_file.delete(save=False))
         except Exception as exc:
