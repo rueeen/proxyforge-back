@@ -12,6 +12,7 @@ from django.db import connection
 from django.utils import timezone
 
 from .errors import short_error
+from .framing import apply_auto_framing
 from .auto_references import enabled, fetch_auto_reference
 from .references import reference_hashes
 from .models import GeneratedImage, GenerationJob
@@ -87,6 +88,11 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=
     except Exception:
         generated.image.delete(save=False)
         raise
+    if layout == 'borderless' and enabled('AUTO_FRAMING'):
+        try:
+            apply_auto_framing(generated, layout, image_bytes)
+        except Exception as exc:
+            logger.warning("No se pudo aplicar el encuadre: %s", str(exc)[:200])
     return generated
 
 

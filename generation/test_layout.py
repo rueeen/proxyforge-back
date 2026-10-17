@@ -124,7 +124,7 @@ class ProviderLayoutTests(SimpleTestCase):
         self.assertEqual(result['used_provider'], 'gemini')
 
 
-@patch.dict(os.environ, {'IMAGE_PROVIDER': 'gemini', 'IMAGE_FALLBACK_PROVIDER': ''})
+@patch.dict(os.environ, {'IMAGE_PROVIDER': 'gemini', 'IMAGE_FALLBACK_PROVIDER': '', 'AUTO_FRAMING': 'false'})
 class DeckLayoutTests(TestCase):
     def setUp(self):
         self.deck = Deck.objects.create(name='Deck', theme='theme', raw_list='Card', card_layout='classic')
@@ -224,7 +224,7 @@ class LayoutMigrationTests(TransactionTestCase):
     def test_existing_decks_classic_and_new_decks_borderless(self):
         before = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'),
                   ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
-        after = [('decks', '0005_deck_card_layout'), ('generation', '0005_referenceimage_origin_and_more')]
+        after = [('decks', '0005_deck_card_layout'), ('generation', '0006_generatedimage_face_center_y_and_more')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:
