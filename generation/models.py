@@ -40,7 +40,7 @@ class GeneratedImage(models.Model):
 
 class ThemeAssignment(models.Model):
     AUTO_STATUS = [("", "Sin intentar"), ("found", "Encontrada"), ("not_found", "No encontrada"),
-                   ("rejected", "Descartada"), ("error", "Error")]
+                   ("rejected", "Descartada"), ("error", "Error"), ("blocked", "Descarga bloqueada")]
     needs_reference = models.BooleanField(default=False)
     reference_wiki = models.CharField(max_length=200, blank=True)
     reference_page = models.CharField(max_length=300, blank=True)

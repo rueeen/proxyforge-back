@@ -107,7 +107,7 @@ class AutoReferenceTests(TestCase):
         self.assertEqual(list(item.references.all()), [])
         self.assertEqual(fetch_auto_reference(item)['status'], 'found')
         self.assertEqual(len(list(item.references.all())), 1)
-        self.assertEqual(fetch_auto_references(self.deck, deck_card_ids=[]), dict(found=0, not_found=0, rejected=0, error=0, skipped=0))
+        self.assertEqual(fetch_auto_references(self.deck, deck_card_ids=[]), dict(found=0, not_found=0, rejected=0, error=0, blocked=0, skipped=0))
         summary = fetch_auto_references(self.deck, deck_card_ids=[self.entry.id])
         self.assertEqual(summary['skipped'], 1)
 

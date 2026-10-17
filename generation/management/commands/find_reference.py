@@ -9,7 +9,7 @@ from django.utils.text import slugify
 
 from generation.auto_references import verify_reference
 from generation.references import normalize_reference
-from generation.wiki_images import LAST_RESULTS, WikiImageError, WikiImageNotFound, find_wiki_image
+from generation.wiki_images import WikiDownloadBlocked, LAST_RESULTS, WikiImageError, WikiImageNotFound, find_wiki_image
 
 
 class Command(BaseCommand):
@@ -25,8 +25,13 @@ class Command(BaseCommand):
         try:
             raw, url = find_wiki_image(wiki, page)
             normalized, _ = normalize_reference(raw)
+        except WikiDownloadBlocked as exc:
+            self.stdout.write('Status: blocked')
+            raise CommandError(str(exc)) from exc
         except (WikiImageError, WikiImageNotFound, ValueError) as exc:
-            raise CommandError(str(exc)[:200]) from exc
+            self.stdout.write('Status: not_found' if isinstance(exc, WikiImageNotFound) else 'Status: error')
+            raise CommandError(str(exc)[:300]) from exc
+        self.stdout.write('Status: found')
         details = LAST_RESULTS.get((wiki, page), {})
         self.stdout.write(f"API: https://{wiki}{details.get('api', '/api.php')}")
         self.stdout.write(f"Paso: {details.get('step', '?')}; origen: {url}")
