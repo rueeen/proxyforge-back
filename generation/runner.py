@@ -13,7 +13,7 @@ from django.utils import timezone
 
 from .errors import short_error
 from .framing import apply_auto_framing
-from .auto_references import enabled, fetch_auto_reference
+from .auto_references import enabled, fetch_auto_reference, reference_assignments
 from .references import reference_hashes
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
@@ -118,10 +118,12 @@ def run_job(job_id):
         brief = deck_brief(job.deck)
         assignments = assignment_map(job.deck)
         if cards and not any(card.oracle_id in assignments for card in cards):
-            build_theme_plan(job.deck, brief=brief)
+            build_theme_plan(job.deck, brief=brief, progress=lambda stage, completed, total: _job_progress(
+                job, stage, job.completed_cards, job.total_cards))
             assignments = assignment_map(job.deck)
         provider = get_provider()
-        for card in cards:
+        for index, card in enumerate(cards, 1):
+            _job_progress(job, _item_stage('Generando ', card.name, index, len(cards)), job.completed_cards, job.total_cards)
             try:
                 assignment = assignments.get(card.oracle_id)
                 if (enabled('AUTO_REFERENCES_IN_JOBS') and assignment is not None
@@ -139,11 +141,92 @@ def run_job(job_id):
             job.save(update_fields=["completed_cards", "failed_cards", "error_message", "updated_at"])
         job.status = "failed" if cards and job.failed_cards == len(cards) else "done"
         job.finished_at = timezone.now()
-        job.save(update_fields=["status", "finished_at", "error_message", "updated_at"])
+        job.stage = "Imágenes listas" if job.status == "done" else "Generación fallida"
+        job.save(update_fields=["status", "stage", "finished_at", "error_message", "updated_at"])
     except Exception as exc:
         logger.exception("El job %s falló antes de completar el procesamiento", job_id)
         GenerationJob.objects.filter(pk=job_id).update(
             status="failed", error_message=short_error(exc), finished_at=timezone.now(), updated_at=timezone.now()
         )
+    finally:
+        connection.close()
+
+
+def start_plan_job(job):
+    thread = threading.Thread(target=run_plan_job, args=(job.id,), daemon=True)
+    thread.start()
+    return thread
+
+
+def start_references_job(job):
+    thread = threading.Thread(target=run_references_job, args=(job.id,), daemon=True)
+    thread.start()
+    return thread
+
+
+def _item_stage(prefix, name, index, total):
+    suffix = f' ({index} de {total})'
+    return prefix + name[:120 - len(prefix) - len(suffix)] + suffix
+
+
+def _job_progress(job, stage, completed, total):
+    job.stage = stage[:120]
+    job.completed_cards, job.total_cards = completed, total
+    job.save(update_fields=['stage', 'completed_cards', 'total_cards', 'updated_at'])
+
+
+def _job_started(job):
+    job.status = 'running'
+    job.started_at = timezone.now()
+    job.save(update_fields=['status', 'started_at', 'updated_at'])
+
+
+def _job_failed(job_id, exc):
+    logger.exception('El job %s falló', job_id)
+    GenerationJob.objects.filter(pk=job_id).update(status='failed', stage='Error',
+        error_message=short_error(exc), finished_at=timezone.now(), updated_at=timezone.now())
+
+
+def run_plan_job(job_id):
+    connection.close()
+    try:
+        job = GenerationJob.objects.select_related('deck').get(pk=job_id)
+        _job_started(job)
+        build_theme_plan(job.deck, overwrite_edited=job.options.get('overwrite_edited', False), brief=deck_brief(job.deck),
+                         progress=lambda stage, completed, total: _job_progress(job, stage, completed, total))
+        job.status, job.stage = 'done', 'Plan listo'
+        job.completed_cards = job.total_cards
+        job.finished_at = timezone.now()
+        job.save(update_fields=['status', 'stage', 'completed_cards', 'finished_at', 'updated_at'])
+    except Exception as exc:
+        _job_failed(job_id, exc)
+    finally:
+        connection.close()
+
+
+def run_references_job(job_id):
+    connection.close()
+    try:
+        job = GenerationJob.objects.select_related('deck').get(pk=job_id)
+        _job_started(job)
+        assignments = reference_assignments(job.deck, job.options.get('deck_card_ids'))
+        total = len(assignments)
+        summary = dict(found=0, not_found=0, rejected=0, error=0, blocked=0, skipped=0)
+        _job_progress(job, 'Buscando referencias', 0, total)
+        for index, assignment in enumerate(assignments, 1):
+            stage = _item_stage('Buscando referencias: ', assignment.element, index, total)
+            _job_progress(job, stage, index - 1, total)
+            result = fetch_auto_reference(assignment, force=job.options.get('force', False))
+            summary[result['status']] += 1
+            if result['status'] in ('error', 'blocked', 'rejected'):
+                job.failed_cards += 1
+            job.completed_cards = index
+            job.save(update_fields=['completed_cards', 'failed_cards', 'updated_at'])
+        job.options = {**job.options, 'summary': summary}
+        job.status, job.stage = 'done', 'Referencias listas'
+        job.finished_at = timezone.now()
+        job.save(update_fields=['options', 'status', 'stage', 'finished_at', 'updated_at'])
+    except Exception as exc:
+        _job_failed(job_id, exc)
     finally:
         connection.close()

@@ -117,7 +117,7 @@ class ClaudeClientTests(SimpleTestCase):
 
 class PlannerBatchTests(TestCase):
     @patch('generation.claude_client.Anthropic')
-    def test_sixty_five_cards_in_three_batches(self, anthropic):
+    def test_sixty_five_cards_in_four_parallel_batches(self, anthropic):
         deck = Deck.objects.create(card_layout="classic", name='Deck', raw_list='', theme='theme')
         for i in range(65):
             card = make_card(name=f'Card {i}')
@@ -131,13 +131,11 @@ class PlannerBatchTests(TestCase):
         create.side_effect = answer
         result = build_theme_plan(deck)
         self.assertEqual(len(result), 65)
-        self.assertEqual(create.call_count, 3)
+        self.assertEqual(create.call_count, 4)
         inputs = [json.loads(call.kwargs['messages'][0]['content']) for call in create.call_args_list]
-        self.assertEqual([len(data['cards']) for data in inputs], [30, 30, 5])
-        self.assertEqual([len(data['used_elements']) for data in inputs], [0, 30, 60])
-        self.assertEqual(set(inputs[1]['used_elements']), {card['name'] for card in inputs[0]['cards']})
-        self.assertEqual(set(inputs[2]['used_elements']), {card['name'] for data in inputs[:2] for card in data['cards']})
-        self.assertTrue(all(call.kwargs['max_tokens'] == 8000 for call in create.call_args_list))
+        self.assertEqual(sorted(len(data['cards']) for data in inputs), [5, 20, 20, 20])
+        self.assertTrue(all(not data['used_elements'] for data in inputs))
+        self.assertTrue(all(call.kwargs['max_tokens'] == 5000 for call in create.call_args_list))
 
 
 class ShortErrorTests(TestCase):
@@ -170,7 +168,6 @@ class ShortErrorTests(TestCase):
 
     def test_502_messages_are_capped(self):
         paths = [('generation.views.render_card_image', f'/api/cards/{self.entry.id}/regenerate/'),
-                 ('generation.views.build_theme_plan', f'/api/decks/{self.deck.id}/theme-plan/'),
                  ('generation.views.build_theme_questions', f'/api/decks/{self.deck.id}/theme-questions/')]
         for target, path in paths:
             with self.subTest(path=path), patch(target, side_effect=RuntimeError('x' * 700)):

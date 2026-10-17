@@ -44,6 +44,10 @@ el frontend permitido por CORS es `http://localhost:5173`.
 | `XAI_IMAGE_MODEL` | Modelo de Grok; predeterminado `grok-imagine-image-2.0`. |
 | `XAI_IMAGE_RESOLUTION` | Resolución de Grok: `1k` (predeterminado) o `2k`. |
 | `XAI_IMAGE_QUALITY` | Calidad de Grok: `medium` (predeterminado), `low` o `auto`; solo se envía a modelos `grok-imagine-image-2*`. |
+| `PLAN_PARALLEL_BATCHES` | Llamadas simultáneas para los lotes del plan; predeterminado `3`. |
+| `PLAN_BATCH_SIZE` | Cartas por lote del plan; predeterminado `20`. |
+| `ANTHROPIC_PLAN_MODEL` | Modelo opcional solo para el plan; vacío usa `ANTHROPIC_MODEL`. |
+| `PAGE_SEARCH_LIMIT` | Máximo de búsquedas individuales de páginas por verificación; predeterminado `25`. |
 | `MAX_CARDS_PER_JOB` | Máximo de cartas únicas pendientes por petición; predeterminado `5`. |
 | `AUTO_REFERENCE_COUNT` | Referencias automáticas por carta (1–3); predeterminado `2`. |
 | `COST_PER_REFERENCE_USD` | Costo por referencia usada en cada imagen generada; predeterminado `0.01`. |
@@ -206,7 +210,7 @@ curl -X POST http://127.0.0.1:8000/api/decks/1/generate/ \
 El estimado incluye `batch_size = min(batch_limit, to_generate)` y `batch_cost_usd`.
 Los costes mostrados corresponden a imágenes; no incluyen el plan ni prompts de Claude.
 
-El plan procesa lotes de hasta 30 cartas con Claude para asignar un elemento concreto y distinto a cada
+El plan procesa lotes de hasta 20 cartas con Claude, con tres llamadas en paralelo por defecto, para asignar un elemento concreto y distinto a cada
 carta única según su función, incluyendo personajes y referencias canónicas si el tema
 es una franquicia, o sujetos variados si es una estética. Si faltan asignaciones, hace
 un único reintento solo con las cartas faltantes. Puede prepararse antes de generar:
@@ -219,8 +223,8 @@ curl -X PATCH http://127.0.0.1:8000/api/cards/12/theme-assignment/ \
   -d '{"element":"Storm Eagle","category":"Jefe Maverick","visual_brief":"Storm Eagle en picada sobre la cubierta de una aeronave, soltando ráfagas de viento."}'
 ```
 
-El POST es síncrono y devuelve el detalle del mazo (502 si Claude falla). Conserva las
-asignaciones editadas salvo `overwrite_edited:true`. El PATCH requiere los tres campos;
+El POST responde **202 con un job de tipo `plan`**; los fallos de Claude se consultan
+en el job (`status:"failed"`, `error_message`). Conserva las asignaciones editadas salvo `overwrite_edited:true`. El PATCH requiere los tres campos;
 `category` admite cadena vacía, y marca `edited:true`. Devuelve el DeckCard completo;
 una carta sin resolver responde 400. Ambos rechazan cambios durante un job activo (409).
 
@@ -331,11 +335,11 @@ a las de los mazos que no usan entrevista.
 
 Los prompts por carta usan `ANTHROPIC_CARD_MAX_TOKENS=4000` y piden campos breves;
 `full_prompt` y `fallback_prompt` se escriben en inglés; nombre y flavor usan
-`CARD_TEXT_LANGUAGE` (inglés por defecto). El planner procesa lotes de 30 cartas con 8000 tokens por lote,
-compartiendo los elementos ya usados. La entrevista dispone de 3000 tokens.
+`CARD_TEXT_LANGUAGE` (inglés por defecto). El planner procesa lotes de 20 cartas con 5000 tokens por lote y tres workers por defecto.
+Los elementos repetidos entre lotes se resuelven en una segunda pasada secuencial con los ya usados. La entrevista dispone de 3000 tokens.
 
 Si Claude informa `stop_reason=max_tokens`, se reintenta automáticamente una vez con
-el doble de tokens (16000 en el planner), el mensaje original y una instrucción de
+el doble de tokens (10000 en el planner), el mensaje original y una instrucción de
 concisión. La respuesta truncada no se agrega al historial. El JSON inválido sin
 truncamiento usa el reintento de corrección habitual. Si ambos intentos fallan, la
 API y el job muestran un mensaje corto; las respuestas fallidas se registran solo en
@@ -448,12 +452,12 @@ curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/auto-reference/
   -H 'Content-Type: application/json' -d '{"force":true}'
 ```
 
-El endpoint del mazo devuelve su detalle más
-`auto_reference_summary: {"found":0,"not_found":0,"rejected":0,"error":0,"blocked":0,"skipped":0}`.
+El endpoint del mazo responde **202 con un job de tipo `references`**. Al finalizar,
+el job expone `summary: {"found":0,"not_found":0,"rejected":0,"error":0,"blocked":0,"skipped":0}`.
 Omitir `deck_card_ids` procesa todas las asignaciones; una lista vacía no procesa
 ninguna. El endpoint por carta devuelve el DeckCard y usa `force:true` por defecto;
-responde 400 si faltan asignación, wiki o página. Ambos son síncronos y responden
-409 si hay un job activo. `force:true` reemplaza todas las referencias automáticas anteriores y sus archivos, y
+responde 400 si faltan asignación, wiki o página y **sigue siendo síncrono**. Ambos responden
+409 si hay un job activo de cualquier tipo. `force:true` reemplaza todas las referencias automáticas anteriores y sus archivos, y
 reintenta aunque needs_reference sea false. Conserva las referencias manuales y las elegidas de la wiki.
 
 Puedes corregir la wiki o página desde el PATCH de asignación:
@@ -779,3 +783,73 @@ verificación en lote es una llamada corta a Claude adicional. El estimado agreg
 `reference_cost_usd` y lo incluye en `estimated_cost_usd` y `batch_cost_usd`. Cuenta
 las referencias actuales y, para una carta que necesita referencias, sin imágenes
 ni intentos previos, prevé `auto_reference_count`.
+
+## Plan y referencias en segundo plano
+
+`POST /api/decks/<id>/theme-plan/` y `POST /api/decks/<id>/auto-references/` responden
+**202** inmediatamente después de encolar el trabajo. Mantienen sus cuerpos actuales:
+`{"overwrite_edited":false}` y `{"force":false,"deck_card_ids":[12,13]}` respectivamente.
+La respuesta es el job, no el detalle del mazo:
+
+```json
+{
+  "id": 22,
+  "deck": 1,
+  "kind": "plan",
+  "stage": "En cola",
+  "status": "pending",
+  "total_cards": 4,
+  "completed_cards": 0,
+  "failed_cards": 0,
+  "summary": null,
+  "error_message": "",
+  "started_at": null,
+  "finished_at": null,
+  "updated_at": "2026-10-17T16:00:00Z"
+}
+```
+
+Consulta `GET /api/jobs/22/` periódicamente y muestra `stage`. Al terminar, vuelve a
+pedir `GET /api/decks/1/` para obtener el plan o las referencias actualizadas. El detalle
+incluye el mismo job en `active_job` mientras esté pendiente o ejecutándose. Solo se
+permite **un job activo por mazo**, sea `images`, `plan` o `references`; otro intento
+responde 409. No lances la generación de imágenes hasta terminar los pasos anteriores.
+
+En un plan, `total_cards` cuenta lotes y `completed_cards` los lotes completados; el
+total puede crecer en uno si hace falta una segunda pasada. Las etapas incluyen
+«Planificando lote X de Y», «Completando cartas faltantes», «Verificando wiki» y
+«Verificando páginas de la wiki (N)». Finaliza con `status:"done"`, `stage:"Plan listo"`.
+
+En referencias, el total cuenta asignaciones y el progreso muestra
+«Buscando referencias: <element> (X de Y)». `completed_cards` cuenta las procesadas;
+`failed_cards` cuenta las que terminaron en `error`, `blocked` o `rejected`. Al terminar,
+`summary` contiene los contadores `found`, `not_found`, `rejected`, `error`, `blocked`
+y `skipped`, también si algunas cartas fallaron. Un error que aborta el job deja
+`status:"failed"` y un `error_message` corto. El endpoint de referencia por carta
+permanece síncrono.
+
+Para reducir tiempos, el plan usa `PLAN_BATCH_SIZE=20` y
+`PLAN_PARALLEL_BATCHES=3`. El comandante y las legendarias entran primero; las llamadas
+a Claude se ejecutan en paralelo y las escrituras de SQLite se realizan únicamente
+en el thread que coordina el job. Las respuestas se unen en orden de lote: ante un
+elemento repetido gana la primera aparición y las cartas restantes van a una única
+segunda pasada secuencial. El prompt pide hasta 25 palabras en `visual_brief` y cuatro
+en `category`; usa 5000 tokens, o 10000 tras truncamiento.
+
+Puedes configurar `ANTHROPIC_PLAN_MODEL` para usar un modelo más rápido solo en el
+plan. Vacío hereda `ANTHROPIC_MODEL`. Ajusta el paralelismo según los límites de tu
+cuenta de Anthropic; no se garantiza una duración fija. El log INFO de
+`generation.theme_planner` registra la duración de cada lote, de la segunda pasada
+y de las verificaciones de wiki y páginas.
+
+La comprobación de páginas conserva los lotes de 50 títulos y limita las búsquedas
+individuales mediante `PAGE_SEARCH_LIMIT=25` por ejecución, compartido entre wikis.
+Las páginas que exceden el límite quedan con `reference_page_status:""`, sin verificar;
+se verifican al buscar referencias o editar la carta. Se sigue respetando la pausa
+por host del cliente MediaWiki.
+
+Los jobs usan threads daemon, sin servicios ni dependencias adicionales. Cada cambio
+de progreso actualiza `updated_at`. Si el servidor se reinicia, el mecanismo existente
+de `STALE_JOB_MINUTES` también expira los jobs de plan y referencias. Un job de imágenes
+que necesite crear el plan utiliza el mismo planner paralelo y muestra sus etapas antes
+de «Generando <nombre de carta> (X de Y)».

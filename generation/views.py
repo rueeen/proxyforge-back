@@ -23,17 +23,17 @@ from .wiki_sites import probe_wiki, normalize_domain, verify_assignment_pages
 from .wiki_discovery import discover_wikis
 from .wiki_images import (normalize_wiki_reference, list_wiki_images, reference_page_url,
                           wiki_file_image, _download, WikiDownloadBlocked, WikiImageError, WikiImageNotFound)
-from .auto_references import fetch_auto_reference, fetch_auto_references
+from .auto_references import fetch_auto_reference, reference_assignments
 from .jobs import expire_stale_jobs
 
 from .models import GeneratedImage, GenerationJob, ThemeAssignment, ReferenceImage
 from .selection import batch_limit, pending_entries, assignment_map
-from .theme_planner import build_theme_plan
+from .theme_planner import plan_batch_count
 from .theme_interview import build_theme_questions, deck_brief, validate_theme_answers
 from .prompt_builder import make_cache_key
 from .references import reference_hashes, normalize_reference, MAX_REFERENCE_BYTES
 from .providers import get_provider, get_provider_name
-from .runner import render_card_image, save_card_image, start_job
+from .runner import render_card_image, save_card_image, start_job, start_plan_job, start_references_job
 from .serializers import GenerationJobSerializer, ThemeAssignmentInputSerializer
 
 
@@ -50,7 +50,7 @@ class GenerateDeckView(APIView):
         selected = pending[:min(limit, batch_limit())]
         if not selected:
             return Response({"detail": "No hay cartas pendientes de generar."}, status=400)
-        job = GenerationJob.objects.create(deck=deck, total_cards=len(selected),
+        job = GenerationJob.objects.create(deck=deck, kind="images", stage="En cola", total_cards=len(selected),
                                           card_oracle_ids=[str(row.card.oracle_id) for row in selected])
         start_job(job)
         return Response(GenerationJobSerializer(job).data, status=status.HTTP_202_ACCEPTED)
@@ -128,13 +128,10 @@ class ThemePlanView(APIView):
         overwrite = request.data.get("overwrite_edited", False)
         if type(overwrite) is not bool:
             return Response({"overwrite_edited": ["Debe ser un booleano."]}, status=400)
-        brief = deck_brief(deck)
-        try:
-            build_theme_plan(deck, overwrite_edited=overwrite, brief=brief)
-        except Exception as exc:
-            return Response({"detail": short_error(exc)}, status=502)
-        deck = Deck.objects.prefetch_related("cards__card").get(pk=deck.pk)
-        return Response(DeckDetailSerializer(deck, context=deck_detail_context(deck, request, brief=brief)).data)
+        job = GenerationJob.objects.create(deck=deck, kind='plan', stage='En cola',
+            total_cards=plan_batch_count(deck, overwrite), options={'overwrite_edited': overwrite})
+        start_plan_job(job)
+        return Response(GenerationJobSerializer(job).data, status=202)
 
 
 class ThemeAssignmentView(APIView):
@@ -289,9 +286,10 @@ class AutoReferencesView(APIView):
         if type(force) is not bool or (ids is not None and (not isinstance(ids, list) or
                 any(type(value) is not int or value < 1 for value in ids))):
             return Response({'detail': 'force debe ser booleano y deck_card_ids una lista de ids.'}, status=400)
-        summary = fetch_auto_references(deck, deck_card_ids=ids, force=force)
-        data = DeckDetailSerializer(deck, context=deck_detail_context(deck, request)).data
-        return Response({**data, 'auto_reference_summary': summary})
+        job = GenerationJob.objects.create(deck=deck, kind='references', stage='En cola',
+            options={'force': force, 'deck_card_ids': ids}, total_cards=len(reference_assignments(deck, ids)))
+        start_references_job(job)
+        return Response(GenerationJobSerializer(job).data, status=202)
 
 
 class AutoReferenceView(APIView):

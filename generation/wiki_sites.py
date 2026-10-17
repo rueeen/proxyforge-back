@@ -1,3 +1,4 @@
+import os
 from collections import defaultdict
 from datetime import timedelta
 
@@ -71,30 +72,52 @@ def page_hits(domain: str, titles: list[str]) -> dict:
     return dict(checked=len(titles), found=sum(value is not None for value in resolved.values()), resolved=resolved)
 
 
-def verify_assignment_pages(deck, assignments):
+def verify_assignment_pages(deck, assignments, callback=None):
     groups = defaultdict(list)
     for assignment in assignments:
         if assignment.reference_wiki and assignment.reference_page:
             groups[assignment.reference_wiki].append(assignment)
+    total = sum(len(items) for items in groups.values())
+    completed, searches = 0, 0
+    search_limit = max(0, int(os.getenv('PAGE_SEARCH_LIMIT', '25')))
+
+    def report():
+        if callback:
+            callback(f'Verificando páginas de la wiki ({completed} de {total})', completed, total)
+
+    report()
     for domain, items in groups.items():
         titles = list(dict.fromkeys(item.reference_page for item in items))
         resolved, statuses = {}, {}
         for offset in range(0, len(titles), 50):
             batch = titles[offset:offset + 50]
+            report()
             try:
                 found = _resolve_pages(domain, batch)
-                for title, actual in found.items():
-                    status = 'ok'
-                    if actual is None:
-                        actual = _search_page(domain, title)
-                        status = 'search' if actual else 'missing'
-                    resolved[title], statuses[title] = actual, status
             except WikiImageError:
+                found = {title: None for title in batch}
                 for title in batch:
-                    resolved[title], statuses[title] = None, 'missing'
+                    resolved[title], statuses[title] = None, ''
+                continue
+            for title, actual in found.items():
+                status = 'ok'
+                if actual is None:
+                    if searches >= search_limit:
+                        status = ''
+                    else:
+                        searches += 1
+                        try:
+                            actual = _search_page(domain, title)
+                            status = 'search' if actual else 'missing'
+                        except WikiImageError:
+                            status = ''
+                        report()
+                resolved[title], statuses[title] = actual, status
         for assignment in items:
             title = assignment.reference_page
             assignment.reference_page_status = statuses[title]
             if resolved[title]:
                 assignment.reference_page = resolved[title]
             assignment.save(update_fields=['reference_page', 'reference_page_status'])
+            completed += 1
+            report()

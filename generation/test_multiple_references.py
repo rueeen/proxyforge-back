@@ -34,6 +34,8 @@ class MultipleReferenceTests(TestCase):
 
     def api(self, url, **kwargs):
         params = kwargs.get('params', {})
+        if params.get('titles') and not params.get('prop'):
+            return response({'query': {'pages': [{'title': title} for title in params['titles'].split('|')]}})
         if params.get('prop') == 'pageimages':
             return response(page(title='Character', pageimage=self.files[0]))
         if params.get('action') == 'parse':

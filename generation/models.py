@@ -10,6 +10,9 @@ class GenerationJob(models.Model):
         ("pending", "Pending"), ("running", "Running"), ("done", "Done"),
         ("failed", "Failed"), ("cancelled", "Cancelled"),
     ]
+    kind = models.CharField(max_length=20, choices=[("images", "Imágenes"), ("plan", "Plan temático"), ("references", "Referencias")], default="images")
+    stage = models.CharField(max_length=120, blank=True)
+    options = models.JSONField(default=dict)
     deck = models.ForeignKey(Deck, related_name="jobs", on_delete=models.CASCADE)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     updated_at = models.DateTimeField(auto_now=True)
