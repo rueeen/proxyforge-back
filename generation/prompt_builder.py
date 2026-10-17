@@ -4,7 +4,9 @@ import json
 import os
 import re
 
-from anthropic import Anthropic, APIStatusError
+from anthropic import APIStatusError
+
+from .claude_client import call_claude_json, parse_json
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +15,9 @@ EXPECTED_FIELDS = {"subject", "action", "setting", "palette", "style_notes", "co
 SYSTEM_PROMPT = """Actúa como director de arte. Traduce los datos de una carta de Magic: The Gathering a una descripción visual original dentro del tema pedido. Conserva siempre su flavor mecánico: una remoción muestra destrucción, un buff potenciación y un contrahechizo interrupción.
 
 Responde únicamente JSON válido, sin preámbulo ni bloques Markdown, con exactamente estas claves: subject, action, setting, palette (lista de tres colores hex), style_notes, composition, full_prompt (un solo párrafo listo para un generador de imágenes), fallback_prompt, concept_source, themed_name, themed_flavor y frame_style.
+
+Límites de extensión: concept_source máximo 60 palabras; subject 25; action 40; setting 40; style_notes 40; composition 40; full_prompt 150; fallback_prompt 150. themed_name máximo 30 caracteres y themed_flavor máximo 140 caracteres. Escribe concept_source primero en el JSON y sé breve en él: es contexto interno, no el prompt.
+full_prompt y fallback_prompt se escriben en inglés. Mantén los nombres propios de personajes, lugares y armas como en la franquicia. themed_name y themed_flavor siguen en español; los demás campos pueden quedar en español.
 
 Si recibes la ilustración original, describe primero en concept_source qué concepto representa: sujeto, acción, emoción y relación con la mecánica. Luego reinterpreta ese concepto dentro del tema.
 
@@ -49,10 +54,10 @@ def make_cache_key(oracle_id, theme: str, provider: str, assignment=None, brief=
 
 
 def _clean_json(raw: str) -> dict:
-    cleaned = raw.strip()
-    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s*```$", "", cleaned)
-    result = json.loads(cleaned)
+    return _validate_prompt(parse_json(raw))
+
+
+def _validate_prompt(result):
     missing = EXPECTED_FIELDS - result.keys() if isinstance(result, dict) else EXPECTED_FIELDS
     if missing:
         raise ValueError(f"Faltan campos JSON: {', '.join(sorted(missing))}")
@@ -72,7 +77,6 @@ def _clean_json(raw: str) -> dict:
 
 
 def build_visual_prompt(card, theme: str, assignment=None, brief=None) -> dict:
-    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     card_data = {
         "mana_cost": card.mana_cost, "power": card.power, "toughness": card.toughness,
         "loyalty": card.loyalty, "keywords": card.keywords,
@@ -89,30 +93,13 @@ def build_visual_prompt(card, theme: str, assignment=None, brief=None) -> dict:
     if card.original_art_url:
         content.insert(0, {"type": "image", "source": {"type": "url", "url": card.original_art_url}})
     messages = [{"role": "user", "content": content}]
-    image_retry_available = bool(card.original_art_url)
-    raw_responses = []
-    for attempt in range(2):
-        kwargs = dict(model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-                      max_tokens=1500, system=SYSTEM_PROMPT)
-        try:
-            response = client.messages.create(messages=messages, **kwargs)
-        except APIStatusError as exc:
-            error = str(exc).lower()
-            if not image_retry_available or not any(word in error for word in ("image", "download", "url")):
-                raise
-            image_retry_available = False
-            logger.warning("Claude no pudo obtener la ilustración original; reintentando sin imagen")
-            messages = [{**message, "content": [text_block]} if i == 0 else message
-                        for i, message in enumerate(messages)]
-            response = client.messages.create(messages=messages, **kwargs)
-        raw = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
-        raw_responses.append(raw)
-        try:
-            return _clean_json(raw)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            if attempt == 0:
-                messages.extend([
-                    {"role": "assistant", "content": raw},
-                    {"role": "user", "content": "Devuelve únicamente JSON válido con todas las claves solicitadas, sin fences Markdown."},
-                ])
-    raise ValueError(f"Claude devolvió JSON inválido tras dos intentos. Respuestas crudas: {raw_responses!r}")
+    kwargs = dict(system=SYSTEM_PROMPT, max_tokens=int(os.getenv("ANTHROPIC_CARD_MAX_TOKENS", "4000")),
+                  validate=_validate_prompt)
+    try:
+        return call_claude_json(messages=messages, **kwargs)
+    except APIStatusError as exc:
+        error = str(exc).lower()
+        if not card.original_art_url or not any(word in error for word in ("image", "download", "url")):
+            raise
+        logger.warning("Claude no pudo obtener la ilustración original; reintentando sin imagen")
+        return call_claude_json(messages=[{"role": "user", "content": [text_block]}], **kwargs)

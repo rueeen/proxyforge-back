@@ -69,7 +69,7 @@ class PromptTests(SimpleTestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "fallback_prompt"):
                 _clean_json(json.dumps({**valid_prompt(), "fallback_prompt": value}))
 
-    @patch("generation.prompt_builder.Anthropic")
+    @patch("generation.claude_client.Anthropic")
     def test_missing_fallback_retries_claude(self, anthropic):
         data = valid_prompt()
         del data["fallback_prompt"]
@@ -81,7 +81,7 @@ class PromptTests(SimpleTestCase):
         self.assertEqual(build_visual_prompt(Card(name="Tree"), "tema"), valid_prompt())
         self.assertEqual(create.call_count, 2)
 
-    @patch('generation.prompt_builder.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_image_and_download_fallback(self, anthropic):
         card = Card(name="Tree", original_art_url="https://example.com/art.jpg")
         response = SimpleNamespace(content=[SimpleNamespace(type='text', text=json.dumps(valid_prompt()))])
@@ -99,7 +99,7 @@ class PromptTests(SimpleTestCase):
         self.assertEqual(create.call_count, 2)
         self.assertEqual([b['type'] for b in create.call_args.kwargs['messages'][0]['content']], ['text'])
 
-    @patch('generation.prompt_builder.Anthropic')
+    @patch('generation.claude_client.Anthropic')
     def test_invalid_json_retries(self, anthropic):
         anthropic.return_value.messages.create.side_effect = [
             SimpleNamespace(content=[SimpleNamespace(type='text', text='{}')]),

@@ -1,9 +1,7 @@
 import json
-import os
-import re
 from collections import Counter
 
-from anthropic import Anthropic
+from .claude_client import call_claude_json
 
 from .selection import card_category, type_words, unique_entries
 
@@ -40,9 +38,7 @@ def _text(data, key, limit=None, required=False):
     return value.strip()[:limit] if limit else value.strip()
 
 
-def _clean_questions(raw):
-    raw = re.sub(r'\s*```$', '', re.sub(r'^```(?:json)?\s*', '', raw.strip(), flags=re.I))
-    data = json.loads(raw)
+def _validate_questions(data):
     questions = data.get('questions') if isinstance(data, dict) else None
     if not isinstance(questions, list) or len(questions) > 5:
         raise ValueError('Se esperan de 0 a 5 preguntas')
@@ -65,23 +61,13 @@ def _clean_questions(raw):
         result.append({'id': f'q{index}', 'question': _text(question, 'question', required=True),
                        'help': _text(question, 'help', 160), 'multiple': multiple,
                        'allow_other': allow_other, 'options': clean_options})
-    return result
+    return {"questions": result}
 
 
 def build_theme_questions(deck):
-    client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
     messages = [{'role': 'user', 'content': json.dumps(_interview_input(deck), ensure_ascii=False)}]
-    for attempt in range(2):
-        response = client.messages.create(model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6'),
-                                          max_tokens=3000, system=SYSTEM_PROMPT, messages=messages)
-        raw = ''.join(block.text for block in response.content if getattr(block, 'type', '') == 'text')
-        try:
-            return _clean_questions(raw)
-        except (ValueError, TypeError) as exc:
-            if attempt:
-                raise ValueError('Claude devolvió preguntas inválidas tras dos intentos.') from exc
-            messages = [*messages, {'role': 'assistant', 'content': raw},
-                        {'role': 'user', 'content': 'Devuelve solo JSON válido con questions, de 0 a 5 preguntas, cada una con 2 a 4 opciones y booleanos válidos.'}]
+    return call_claude_json(system=SYSTEM_PROMPT, messages=messages, max_tokens=3000,
+                            validate=_validate_questions)['questions']
 
 
 def validate_theme_answers(deck, answers):
