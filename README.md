@@ -446,7 +446,7 @@ curl -X POST http://127.0.0.1:8000/api/cards/12/theme-assignment/auto-reference/
 ```
 
 El endpoint del mazo devuelve su detalle más
-`auto_reference_summary: {"found":0,"not_found":0,"rejected":0,"error":0,"skipped":0}`.
+`auto_reference_summary: {"found":0,"not_found":0,"rejected":0,"error":0,"blocked":0,"skipped":0}`.
 Omitir `deck_card_ids` procesa todas las asignaciones; una lista vacía no procesa
 ninguna. El endpoint por carta devuelve el DeckCard y usa `force:true` por defecto;
 responde 400 si faltan asignación, wiki o página. Ambos son síncronos y responden
@@ -469,7 +469,7 @@ editadas siguen protegidas salvo `overwrite_edited:true`.
 
 Cada `theme_assignment` expone `needs_reference`, `reference_wiki`, `reference_page`,
 `auto_reference_status` y `auto_reference_message`. Los estados son `""` (sin intentar),
-`found`, `not_found`, `rejected` y `error`. Cada referencia incluye `origin:"manual"`
+`found`, `not_found`, `rejected`, `error` y `blocked`. Cada referencia incluye `origin:"manual"`
 o `origin:"auto"`. El detalle del mazo agrega, sin consultas por carta:
 
 ```json
@@ -501,8 +501,8 @@ python manage.py find_reference "Vol'jin" --wiki warcraft.wiki.gg --verify
 
 Imprime la ruta de API, el paso que encontró la imagen, su URL y dimensiones, y
 opcionalmente la verificación de Claude. Guarda el JPEG normalizado en
-`media/cache/find_reference/<slug>.jpg`. Fandom, wiki.gg y otras wikis MediaWiki usan
-este flujo, aunque algunas pueden bloquear peticiones automatizadas. Las imágenes
+`media/cache/find_reference/<slug>.jpg`. wiki.gg y otras wikis MediaWiki usan este flujo. Fandom permite consultas a la API,
+pero bloquea las descargas automáticas de imágenes; en ese caso se usa la carga manual. Las imágenes
 se descargan **solo para uso local como referencia**; `media/references/` está ignorada
 y no se sube al repositorio, salvo su `.gitkeep` vacío.
 
@@ -606,7 +606,7 @@ La respuesta por carta agrega `auto_reference_result`:
 {"status":"skipped","message":"La búsqueda ya se intentó; usa force para reintentar.","skipped_reason":"already_attempted"}
 ```
 
-status puede ser found, not_found, rejected, error o skipped. skipped_reason es vacío
+status puede ser found, not_found, rejected, error, blocked o skipped. skipped_reason es vacío
 si se intentó; si se omitió, indica no_reference_needed, missing_wiki_or_page,
 already_has_auto_reference o already_attempted. Los errores de normalización
 responden 400 con un mensaje claro.
@@ -617,3 +617,34 @@ y se busca otra; las manuales siempre se conservan. Con tres manuales devuelve e
 «Ya hay 3 referencias manuales; quita una para agregar la de la wiki.».
 Si MediaWiki encuentra otro título mediante search, auto_reference_message informa
 «Encontrada como "<título>"». Los mensajes sin resultado incluyen la página buscada.
+
+
+## Descargas bloqueadas y Fandom
+
+El bloqueo de Fandom está confirmado: la API puede responder, pero la CDN rechaza
+las descargas automatizadas. La app devuelve `blocked` y explica la acción manual:
+abre la página en la wiki, haz clic derecho → **Copiar imagen** y pégala en el frontend
+con **Ctrl+V**. El frontend usa el endpoint de subida manual existente. No se intenta
+eludir el bloqueo ni hacerse pasar por un navegador.
+
+Cada asignación agrega `reference_page_url`, construido con el título codificado
+para el enlace «Abrir página en la wiki» (vacío si no hay wiki o página):
+
+```json
+{"reference_page_url":"https://megaman.fandom.com/wiki/Mega_Man_X_(character)","auto_reference_status":"blocked"}
+```
+
+Los bloqueos de descarga HTTP 401, 403 y 429 se reflejan en
+`auto_reference_status:"blocked"`, en `auto_reference_result.status` y en el contador
+`blocked` del resumen por mazo. Los errores de descarga terminan con la URL fallida
+(hasta 120 caracteres), con un máximo de 300 caracteres para el mensaje completo.
+
+Fuera de Fandom, si se bloquea la imagen original se intenta una vez su miniatura,
+si existe. En Fandom o su CDN wikia.nocookie.net no se intenta la miniatura tras el
+bloqueo. Para HTTP 429, un Retry-After numérico de 0 a 5 segundos permite una espera
+y un único reintento de esa descarga. HTTP 404 y 500 siguen siendo errores de descarga.
+
+El plan prefiere wikis comunitarias activas fuera de Fandom, como warcraft.wiki.gg,
+cuando existen. Si la franquicia solo está en Fandom, lo mantiene como fuente y el
+usuario pega la referencia manualmente. `find_reference` imprime el status final;
+si hubo bloqueo, muestra el mensaje completo con la URL para diagnosticarlo.

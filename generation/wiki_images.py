@@ -1,7 +1,8 @@
 import re
+import math
 import threading
 import time
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, quote
 
 import requests
 
@@ -21,6 +22,16 @@ class WikiImageNotFound(Exception):
 
 class WikiImageError(Exception):
     pass
+
+
+class WikiDownloadBlocked(WikiImageError):
+    pass
+
+
+def reference_page_url(wiki, page):
+    if not wiki or not page:
+        return ''
+    return f'https://{wiki}/wiki/' + quote(page.replace(' ', '_'), safe="()_,'!:")
 
 
 def valid_wiki(wiki):
@@ -102,27 +113,68 @@ def _principal(wiki, page):
                   pithumbsize=1536, titles=page, redirects=1)
     pages = data.get('query', {}).get('pages') or []
     info = pages[0] if pages else {'missing': True}
-    url = (info.get('original') or {}).get('source') or (info.get('thumbnail') or {}).get('source')
-    return info, url
+    original = (info.get('original') or {}).get('source')
+    thumbnail = (info.get('thumbnail') or {}).get('source')
+    return info, original, thumbnail
 
 
-def _download(url):
-    response = _get(url, 20, accept='image/jpeg,image/png,image/webp;q=0.9,*/*;q=0.5')
+def _download_message(message, url):
+    suffix = ' — ' + url[:120]
+    return message[:300 - len(suffix)] + suffix
+
+
+def _is_fandom(wiki, url):
+    wiki_host = wiki.lower()
+    image_host = (urlparse(url).hostname or '').lower()
+    return (wiki_host == 'fandom.com' or wiki_host.endswith('.fandom.com')
+            or image_host == 'wikia.nocookie.net' or image_host.endswith('.wikia.nocookie.net'))
+
+
+def _download_one(url, wiki):
+    try:
+        response = _get(url, 20, accept='image/jpeg,image/png,image/webp;q=0.9,*/*;q=0.5')
+        if response.status_code == 429:
+            try:
+                delay = float(response.headers.get('Retry-After', ''))
+            except (ValueError, TypeError):
+                delay = None
+            if delay is not None and math.isfinite(delay) and 0 <= delay <= 5:
+                time.sleep(delay)
+                response = _get(url, 20, accept='image/jpeg,image/png,image/webp;q=0.9,*/*;q=0.5')
+    except WikiImageError as exc:
+        raise WikiImageError(_download_message(str(exc), url)) from exc
+    if response.status_code in (401, 403, 429):
+        if _is_fandom(wiki, url):
+            message = ('Fandom bloquea descargas automáticas. Abre la página en la wiki, '
+                       'copia la imagen (clic derecho → Copiar imagen) y pégala aquí con Ctrl+V.')
+        else:
+            host = wiki or urlparse(url).hostname or 'La wiki'
+            message = f'{host} bloqueó la descarga (HTTP {response.status_code}). Prueba otra wiki o agrega la imagen manualmente.'
+        raise WikiDownloadBlocked(_download_message(message, url))
     if not 200 <= response.status_code < 300:
-        raise WikiImageError(f'La descarga respondió HTTP {response.status_code}')
+        raise WikiImageError(_download_message(f'La descarga respondió HTTP {response.status_code}', url))
     mime = response.headers.get('Content-Type', '').split(';', 1)[0].strip().lower()
     if mime not in ('image/jpeg', 'image/png', 'image/webp'):
-        raise WikiImageNotFound('El archivo no es una imagen JPEG, PNG o WEBP')
+        raise WikiImageNotFound(_download_message('El archivo no es una imagen JPEG, PNG o WEBP', url))
     try:
         length = int(response.headers.get('Content-Length', '0'))
     except ValueError:
         length = 0
     if length > MAX_REFERENCE_BYTES:
-        raise WikiImageError('La imagen supera 10 MB')
+        raise WikiImageError(_download_message('La imagen supera 10 MB', url))
     raw = response.content
     if len(raw) > MAX_REFERENCE_BYTES:
-        raise WikiImageError('La imagen supera 10 MB')
+        raise WikiImageError(_download_message('La imagen supera 10 MB', url))
     return raw
+
+
+def _download(url, wiki='', fallback_url=None):
+    try:
+        return _download_one(url, wiki), url
+    except WikiDownloadBlocked:
+        if _is_fandom(wiki, url) or not fallback_url or fallback_url == url:
+            raise
+        return _download_one(fallback_url, wiki), fallback_url
 
 
 def find_wiki_image(wiki, page):
@@ -132,7 +184,9 @@ def find_wiki_image(wiki, page):
         raise WikiImageError(str(exc)) from exc
     LAST_RESULTS.pop((wiki, page), None)
     searched = False
-    info, url = _principal(wiki, page)
+    info, original, thumbnail = _principal(wiki, page)
+    url = original or thumbnail
+    fallback_url = thumbnail if original else None
     step = 1
     title = info.get('title') or page
     if info.get('missing'):
@@ -142,7 +196,9 @@ def find_wiki_image(wiki, page):
             raise WikiImageNotFound(f'No existe la página "{page}" en {wiki} y la búsqueda no encontró resultados')
         searched = True
         title = results[0]['title']
-        info, url = _principal(wiki, title)
+        info, original, thumbnail = _principal(wiki, title)
+        url = original or thumbnail
+        fallback_url = thumbnail if original else None
         title = info.get('title') or title
         step = 2
     if not url:
@@ -158,11 +214,12 @@ def find_wiki_image(wiki, page):
             pages = data.get('query', {}).get('pages') or []
             images = pages[0].get('imageinfo') or [] if pages else []
             if images:
-                url = images[0].get('thumburl') or images[0].get('url')
+                url = images[0].get('url') or images[0].get('thumburl')
+                fallback_url = images[0].get('thumburl') if images[0].get('url') else None
                 step = 3
     if not url:
         raise WikiImageNotFound(f'La página "{title}" no tiene imagen utilizable')
-    raw = _download(url)
+    raw, url = _download(url, wiki, fallback_url)
     LAST_RESULTS[(wiki, page)] = {'api': API_PATHS[wiki], 'step': step, 'url': url,
                                   'matched_title': title if searched and title != page else ''}
     return raw, url

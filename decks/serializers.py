@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from generation.prompt_builder import make_cache_key
 from generation.references import reference_hashes
+from generation.wiki_images import reference_page_url
 from generation.serializers import ReferenceImageSerializer
 from generation.models import GeneratedImage
 from generation.selection import assignment_map
@@ -35,6 +36,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
         if assignment is None:
             return None
         return {**{key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited", "needs_reference", "reference_wiki", "reference_page", "auto_reference_status", "auto_reference_message")},
+                "reference_page_url": reference_page_url(assignment.reference_wiki, assignment.reference_page),
                 "references": ReferenceImageSerializer(assignment.references.all(), many=True, context=self.context).data}
 
     class Meta:

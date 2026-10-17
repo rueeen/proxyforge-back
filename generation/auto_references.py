@@ -11,7 +11,7 @@ from .claude_client import call_claude_json
 from .models import ReferenceImage, ThemeAssignment
 from .references import normalize_reference
 from .selection import assignment_map
-from .wiki_images import WikiImageError, WikiImageNotFound, find_wiki_image, normalize_wiki_reference, LAST_RESULTS
+from .wiki_images import WikiDownloadBlocked, WikiImageError, WikiImageNotFound, find_wiki_image, normalize_wiki_reference, LAST_RESULTS
 
 logger = logging.getLogger(__name__)
 VERIFY_PROMPT = '''Verifica si la imagen sirve como referencia de identidad visual del elemento indicado. Sirve si muestra claramente a ese personaje u objeto (cuerpo completo, busto o primer plano), aunque sea arte conceptual, render, captura del juego o ilustración oficial. NO sirve si es un logo, un ícono diminuto, un mapa, una interfaz o pantalla de menú, un texto, una imagen grupal donde no se distingue al sujeto, o claramente otro personaje. Responde solo JSON: {"ok": true|false, "reason": "máx. 120 caracteres en español"}.'''
@@ -129,6 +129,8 @@ def fetch_auto_reference(assignment, force=False):
         return result
     except WikiImageNotFound as exc:
         return _status(assignment, 'not_found', str(exc) or f'No hay imagen en {assignment.reference_wiki}/{assignment.reference_page}')
+    except WikiDownloadBlocked as exc:
+        return _status(assignment, 'blocked', str(exc))
     except (WikiImageError, ValueError) as exc:
         if reference is not None and reference.image:
             reference.image.delete(save=False)
@@ -145,7 +147,7 @@ def fetch_auto_references(deck, deck_card_ids=None, force=False):
     if deck_card_ids is not None:
         oracle_ids = set(deck.cards.filter(id__in=deck_card_ids, card__isnull=False).values_list('card__oracle_id', flat=True))
         assignments = {key: item for key, item in assignments.items() if key in oracle_ids}
-    summary = dict(found=0, not_found=0, rejected=0, error=0, skipped=0)
+    summary = dict(found=0, not_found=0, rejected=0, error=0, blocked=0, skipped=0)
     for assignment in assignments.values():
         result = fetch_auto_reference(assignment, force=force)
         summary[result['status']] += 1

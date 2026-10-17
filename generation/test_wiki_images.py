@@ -52,7 +52,7 @@ class WikiImageTests(SimpleTestCase):
         get.side_effect = [response(page(title='Character')), response({'parse': {'images': [
             'Logo.png', 'Icon_x.png', 'Vector.svg', 'Animation.gif', 'Map.jpg', 'Portrait.png', 'Later.jpg']}}),
             response(page(imageinfo=[{'thumburl': 'https://cdn.example.com/thumb.png', 'url': 'https://cdn.example.com/full.png'}])), response()]
-        self.assertEqual(wiki.find_wiki_image('example.wiki.gg', 'Character')[1], 'https://cdn.example.com/thumb.png')
+        self.assertEqual(wiki.find_wiki_image('example.wiki.gg', 'Character')[1], 'https://cdn.example.com/full.png')
         params = get.call_args_list[2].kwargs['params']
         self.assertEqual(params['titles'], 'File:Portrait.png')
         self.assertEqual(params['iiurlwidth'], 1536)
