@@ -23,14 +23,14 @@ def parse_json(raw):
     return data
 
 
-def call_claude_json(*, system, messages, max_tokens, validate, retry_max_tokens=None):
+def call_claude_json(*, system, messages, max_tokens, validate, retry_max_tokens=None, model=None):
     client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
     original = deepcopy(messages)
     current = deepcopy(original)
     budget = max_tokens
     for attempt in range(2):
         response = client.messages.create(
-            model=os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6'), max_tokens=budget,
+            model=model or os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-6'), max_tokens=budget,
             system=system, messages=current,
         )
         raw = ''.join(block.text for block in response.content if getattr(block, 'type', '') == 'text')

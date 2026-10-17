@@ -35,6 +35,13 @@ class GeneratedImage(models.Model):
 
 
 class ThemeAssignment(models.Model):
+    AUTO_STATUS = [("", "Sin intentar"), ("found", "Encontrada"), ("not_found", "No encontrada"),
+                   ("rejected", "Descartada"), ("error", "Error")]
+    needs_reference = models.BooleanField(default=False)
+    reference_wiki = models.CharField(max_length=200, blank=True)
+    reference_page = models.CharField(max_length=300, blank=True)
+    auto_reference_status = models.CharField(max_length=20, choices=AUTO_STATUS, blank=True)
+    auto_reference_message = models.CharField(max_length=300, blank=True)
     deck = models.ForeignKey(Deck, related_name="theme_assignments", on_delete=models.CASCADE)
     oracle_id = models.UUIDField()
     element = models.CharField(max_length=200)
@@ -48,6 +55,7 @@ class ThemeAssignment(models.Model):
 
 
 class ReferenceImage(models.Model):
+    origin = models.CharField(max_length=10, choices=[("manual", "Manual"), ("auto", "Automática")], default="manual")
     assignment = models.ForeignKey(ThemeAssignment, related_name="references", on_delete=models.CASCADE)
     image = models.ImageField(upload_to="references/")
     source_url = models.URLField(blank=True, max_length=1000)

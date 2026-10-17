@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from .models import GeneratedImage, GenerationJob, ReferenceImage
+from .wiki_images import valid_wiki
 
 
 class GenerationJobSerializer(serializers.ModelSerializer):
@@ -64,6 +65,19 @@ class ThemeAssignmentInputSerializer(serializers.Serializer):
     element = TextField(max_length=200)
     category = TextField(max_length=60, allow_blank=True)
     visual_brief = TextField()
+    needs_reference = serializers.BooleanField(required=False)
+    reference_wiki = TextField(max_length=200, allow_blank=True, required=False)
+    reference_page = TextField(max_length=300, allow_blank=True, required=False)
+
+    def validate_reference_wiki(self, value):
+        if value and not valid_wiki(value):
+            raise serializers.ValidationError("Dominio de wiki inválido.")
+        return value
+
+    def validate_needs_reference(self, value):
+        if type(self.initial_data.get("needs_reference")) is not bool:
+            raise serializers.ValidationError("Debe ser un booleano.")
+        return value
 
 
 class ReferenceImageSerializer(serializers.ModelSerializer):
@@ -71,7 +85,7 @@ class ReferenceImageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ReferenceImage
-        fields = ["id", "image_url", "source_url"]
+        fields = ["id", "image_url", "source_url", "origin"]
 
     def get_image_url(self, obj):
         request = self.context.get("request")

@@ -34,7 +34,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
         assignment = self.context.get("assignments", {}).get(obj.card.oracle_id) if obj.card_id else None
         if assignment is None:
             return None
-        return {**{key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited")},
+        return {**{key: getattr(assignment, key) for key in ("element", "category", "visual_brief", "edited", "needs_reference", "reference_wiki", "reference_page", "auto_reference_status", "auto_reference_message")},
                 "references": ReferenceImageSerializer(assignment.references.all(), many=True, context=self.context).data}
 
     class Meta:
@@ -53,6 +53,14 @@ class DeckCardSerializer(serializers.ModelSerializer):
 
 class DeckDetailSerializer(serializers.ModelSerializer):
     cards = DeckCardSerializer(many=True, read_only=True)
+    auto_reference_counts = serializers.SerializerMethodField()
+
+    def get_auto_reference_counts(self, obj):
+        needed = [item for item in self.context.get("assignments", {}).values() if item.needs_reference]
+        with_reference = sum(bool(list(item.references.all())) for item in needed)
+        pending = sum(not item.auto_reference_status and not list(item.references.all()) for item in needed)
+        return {"needed": len(needed), "with_reference": with_reference, "pending": pending}
+
     theme_brief = serializers.SerializerMethodField()
     theme_plan_stale = serializers.SerializerMethodField()
     has_theme_plan = serializers.SerializerMethodField()
@@ -83,7 +91,7 @@ class DeckDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Deck
         fields = ["id", "name", "raw_list", "theme", "card_layout", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
-                  "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale"]
+                  "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale", "auto_reference_counts"]
 
 
 class DeckListSerializer(serializers.ModelSerializer):

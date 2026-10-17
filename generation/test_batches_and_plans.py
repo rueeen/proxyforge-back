@@ -123,7 +123,7 @@ class BatchAndPlanTests(TestCase):
         data = dict(element='Storm Eagle', category='', visual_brief='Storm Eagle vuela')
         result = self.client.patch(f'/api/cards/{entry.pk}/theme-assignment/', data, content_type='application/json')
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()['theme_assignment'], {**data, 'edited': True, 'references': []})
+        self.assertEqual(result.json()['theme_assignment'], {**data, 'edited': True, 'references': [], 'needs_reference': False, 'reference_wiki': '', 'reference_page': '', 'auto_reference_status': '', 'auto_reference_message': ''})
         self.assertIsNone(result.json()['generated_image'])
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.pk}/estimate/').json()['cached'], 0)
         planned = ThemeAssignment.objects.get()

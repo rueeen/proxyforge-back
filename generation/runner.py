@@ -12,6 +12,7 @@ from django.db import connection
 from django.utils import timezone
 
 from .errors import short_error
+from .auto_references import enabled, fetch_auto_reference
 from .references import reference_hashes
 from .models import GeneratedImage, GenerationJob
 from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
@@ -116,7 +117,14 @@ def run_job(job_id):
         provider = get_provider()
         for card in cards:
             try:
-                generate_card_image(card, job.deck.theme, provider, assignments.get(card.oracle_id), brief, job.deck.card_layout)
+                assignment = assignments.get(card.oracle_id)
+                if (enabled('AUTO_REFERENCES_IN_JOBS') and assignment is not None
+                        and assignment.needs_reference and not assignment.auto_reference_status):
+                    try:
+                        fetch_auto_reference(assignment)
+                    except Exception:
+                        logger.warning("No se pudo buscar referencia para %s; generando sin ella", card.name, exc_info=True)
+                generate_card_image(card, job.deck.theme, provider, assignment, brief, job.deck.card_layout)
                 job.completed_cards += 1
             except Exception as exc:  # Continue so one provider failure does not abort the deck.
                 logger.exception("No se pudo generar arte para %s", card.name)
