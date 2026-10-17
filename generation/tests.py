@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0006_deck_auto_reference_count_deck_reference_wiki_and_more'), ('generation', '0009_wikisite_themeassignment_reference_page_status_and_more')]
+        after = [('decks', '0006_deck_auto_reference_count_deck_reference_wiki_and_more'), ('generation', '0010_generationjob_kind_generationjob_options_and_more')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

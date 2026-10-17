@@ -5,11 +5,16 @@ from .wiki_images import normalize_wiki_reference
 
 
 class GenerationJobSerializer(serializers.ModelSerializer):
+    summary = serializers.SerializerMethodField()
+
+    def get_summary(self, obj):
+        return obj.options.get("summary")
+
     class Meta:
         model = GenerationJob
         fields = [
             "id", "deck", "status", "total_cards", "completed_cards", "failed_cards",
-            "error_message", "started_at", "finished_at", "updated_at",
+            "error_message", "started_at", "finished_at", "updated_at", "kind", "stage", "summary",
         ]
         read_only_fields = fields
 

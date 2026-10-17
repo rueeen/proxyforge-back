@@ -90,7 +90,7 @@ class BatchAndPlanTests(TestCase):
         self.assertIn('Zero', first['used_elements'])
         second = json.loads(create.call_args_list[1].kwargs['messages'][0]['content'])
         self.assertEqual([card['oracle_id'] for card in second['cards']], [str(cards[-1].oracle_id)])
-        self.assertEqual(create.call_args.kwargs['max_tokens'], 8000)
+        self.assertEqual(create.call_args.kwargs['max_tokens'], 5000)
         edited.refresh_from_db()
         self.assertEqual(edited.element, 'Zero')
         self.assertTrue(edited.edited)
@@ -148,16 +148,15 @@ class BatchAndPlanTests(TestCase):
         unresolved = self.deck.cards.filter(card=None).get()
         self.assertEqual(self.client.patch(f'/api/cards/{unresolved.pk}/theme-assignment/', {}, content_type='application/json').status_code, 400)
 
-    @patch('generation.views.build_theme_plan')
-    def test_plan_endpoint_and_conflict(self, build):
+    @patch('generation.views.start_plan_job')
+    def test_plan_endpoint_and_conflict(self, start):
         url = f'/api/decks/{self.deck.pk}/theme-plan/'
-        self.assertEqual(self.client.post(url, {}, content_type='application/json').status_code, 200)
-        build.assert_called_once_with(self.deck, overwrite_edited=False, brief=[])
-        build.side_effect = RuntimeError('Claude unavailable')
         result = self.client.post(url, {}, content_type='application/json')
-        self.assertEqual(result.status_code, 502)
-        self.assertEqual(result.json(), {'detail': 'Claude unavailable'})
-        GenerationJob.objects.create(deck=self.deck, total_cards=1)
+        self.assertEqual(result.status_code, 202)
+        self.assertEqual(result.json()['kind'], 'plan')
+        self.assertEqual(result.json()['stage'], 'En cola')
+        start.assert_called_once()
+        self.assertEqual(start.call_args.args[0].options, {'overwrite_edited': False})
         self.assertEqual(self.client.post(url, {}, content_type='application/json').status_code, 409)
 
     @patch('generation.claude_client.Anthropic')
@@ -176,11 +175,13 @@ class BatchAndPlanTests(TestCase):
     def test_run_job_selected_only_and_plan_failure(self, build, provider, generate, close):
         selected = self.entries[2]
         job = GenerationJob.objects.create(deck=self.deck, total_cards=1, card_oracle_ids=[str(selected.card.oracle_id)])
-        def plan(deck, brief=None):
+        def plan(deck, brief=None, progress=None):
             ThemeAssignment.objects.create(deck=deck, **assignment(selected.card))
         build.side_effect = plan
         run_job(job.id)
-        build.assert_called_once_with(self.deck, brief=[])
+        self.assertEqual(build.call_args.args, (self.deck,))
+        self.assertEqual(build.call_args.kwargs['brief'], [])
+        self.assertTrue(callable(build.call_args.kwargs['progress']))
         self.assertEqual(generate.call_count, 1)
         self.assertEqual(generate.call_args.args[0], selected.card)
         self.assertEqual(generate.call_args.args[3].element, 'Storm Eagle')
@@ -235,7 +236,7 @@ class BatchAndPlanTests(TestCase):
         render.return_value = ({}, b'bytes')
         # Only rendering/persistence are mocked; the response uses the actual serializers.
         save.return_value = image
-        with patch('generation.views.build_theme_plan') as build:
+        with patch('generation.runner.build_theme_plan') as build:
             result = self.client.post(f'/api/cards/{entry.pk}/regenerate/', {}, content_type='application/json')
         self.assertEqual(result.status_code, 200)
         self.assertEqual(render.call_args.args[3], planned)

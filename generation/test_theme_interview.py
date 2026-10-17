@@ -248,8 +248,12 @@ class InterviewTests(TestCase):
         self.assertEqual(self.client.get(f'/api/decks/{self.deck.id}/estimate/').json()['to_generate'], 1)
         self.assertIsNone(self.client.get(f'/api/decks/{self.deck.id}/').json()['cards'][0]['generated_image'])
 
+    @patch('generation.runner.connection.close')
+    @patch('generation.views.start_plan_job')
     @patch('generation.claude_client.Anthropic')
-    def test_plan_stale_then_rebuilt(self, anthropic):
+    def test_plan_stale_then_rebuilt(self, anthropic, start, close):
+        from .runner import run_plan_job
+        start.side_effect = lambda job: run_plan_job(job.pk)
         planned = ThemeAssignment.objects.create(deck=self.deck, oracle_id=self.card.oracle_id,
                                                  element='Arthas', category='', visual_brief='Una escena')
         ThemeAssignment.objects.filter(pk=planned.pk).update(updated_at=timezone.now()-timedelta(minutes=5))
@@ -258,7 +262,8 @@ class InterviewTests(TestCase):
         anthropic.return_value.messages.create.return_value = response({'assignments': [
             {'oracle_id': str(self.card.oracle_id), 'element': 'Arthas', 'category': '', 'visual_brief': 'Una escena'}]})
         result = self.client.post(f'/api/decks/{self.deck.id}/theme-plan/', {}, content_type='application/json')
-        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.status_code, 202)
+        result = self.client.get(f'/api/decks/{self.deck.id}/')
         self.assertFalse(result.json()['theme_plan_stale'])
         ThemeAssignment.objects.update(edited=True)
         self.assertFalse(self.save_answers({'q1': {'option_ids': ['b']}}).json()['theme_plan_stale'])

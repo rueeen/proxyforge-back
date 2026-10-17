@@ -11,6 +11,7 @@ from .claude_client import call_claude_json
 from .models import ReferenceImage, ThemeAssignment
 from .references import normalize_reference
 from .selection import assignment_map
+from .wiki_sites import verify_assignment_pages
 from .wiki_images import WikiDownloadBlocked, WikiImageError, WikiImageNotFound, list_wiki_images, _download, _is_fandom, normalize_wiki_reference
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,8 @@ def fetch_auto_reference(assignment, force=False):
         references = [item for item in references if item.origin != 'auto']
     saved = []
     try:
+        if not assignment.reference_page_status:
+            verify_assignment_pages(assignment.deck, [assignment])
         try:
             candidates, avoided = _reference_candidates(assignment, assignment.reference_wiki, target, references)
         except (WikiImageNotFound, WikiDownloadBlocked):
@@ -222,13 +225,19 @@ def fetch_auto_reference(assignment, force=False):
         return _status(assignment, 'error', str(exc))
 
 
-def fetch_auto_references(deck, deck_card_ids=None, force=False):
+def reference_assignments(deck, deck_card_ids=None):
     assignments = assignment_map(deck)
     if deck_card_ids is not None:
         oracle_ids = set(deck.cards.filter(id__in=deck_card_ids, card__isnull=False).values_list('card__oracle_id', flat=True))
         assignments = {key: item for key, item in assignments.items() if key in oracle_ids}
+    for item in assignments.values():
+        item.deck = deck
+    return list(assignments.values())
+
+
+def fetch_auto_references(deck, deck_card_ids=None, force=False):
     summary = dict(found=0, not_found=0, rejected=0, error=0, blocked=0, skipped=0)
-    for assignment in assignments.values():
+    for assignment in reference_assignments(deck, deck_card_ids):
         result = fetch_auto_reference(assignment, force=force)
         summary[result['status']] += 1
     return summary

@@ -180,17 +180,18 @@ class AutoReferenceTests(TestCase):
             run_job(job.pk)
         fetch.assert_not_called()
 
-    @patch('generation.views.fetch_auto_references')
+    @patch('generation.views.start_references_job')
     @patch('generation.views.fetch_auto_reference')
     def test_endpoints_and_active_job_conflicts(self, fetch_one, fetch_deck):
         fetch_one.return_value = {'status': 'found', 'message': '', 'skipped_reason': ''}
-        fetch_deck.return_value = dict(found=1, not_found=0, rejected=0, error=0, skipped=0)
         deck_url = f'/api/decks/{self.deck.id}/auto-references/'
         card_url = f'/api/cards/{self.entry.id}/theme-assignment/auto-reference/'
         result = self.client.post(deck_url, {'deck_card_ids': [self.entry.id]}, content_type='application/json')
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json()['auto_reference_summary']['found'], 1)
-        fetch_deck.assert_called_once_with(self.deck, deck_card_ids=[self.entry.id], force=False)
+        self.assertEqual(result.status_code, 202)
+        self.assertEqual(result.json()['kind'], 'references')
+        fetch_deck.assert_called_once()
+        self.assertEqual(fetch_deck.call_args.args[0].options, {'deck_card_ids': [self.entry.id], 'force': False})
+        self.deck.jobs.all().delete()
         result = self.client.post(card_url, {}, content_type='application/json')
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json()['id'], self.entry.id)
