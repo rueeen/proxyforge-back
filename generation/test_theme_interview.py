@@ -322,7 +322,7 @@ class InterviewTests(TestCase):
             provider.generate.return_value = stream.getvalue()
             image = generate_card_image(self.card, self.deck.theme, provider, brief=brief)
             self.assertEqual(image.cache_key, make_cache_key(self.card.oracle_id, self.deck.theme, 'gemini', brief=brief))
-            build.assert_called_once_with(self.card, self.deck.theme, None, brief, 'classic', reference_count=0)
+            build.assert_called_once_with(self.card, self.deck.theme, None, brief, 'classic', reference_count=0, original_art_reference=False)
             with patch('generation.runner.render_card_image') as render:
                 self.assertEqual(generate_card_image(self.card, self.deck.theme, provider, brief=brief).pk, image.pk)
             render.assert_not_called()

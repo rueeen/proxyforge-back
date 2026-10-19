@@ -374,7 +374,7 @@ curl -X PATCH http://127.0.0.1:8000/api/decks/1/ \
   -H 'Content-Type: application/json' -d '{"card_layout":"borderless"}'
 ```
 
-El PATCH acepta `card_layout` (`borderless` o `classic`), `auto_reference_count` (entero de 1 a 3) e `image_resolution` (`1k` o `2k`), y devuelve el detalle.
+El PATCH acepta `card_layout` (`borderless` o `classic`), `auto_reference_count` (entero de 1 a 3) e `image_resolution` (`1k` o `2k`) y `original_art_mode` (`off`, `auto` o `always`), y devuelve el detalle.
 Otros campos responden 400;
 un formato inválido devuelve 400 y un job activo devuelve 409.
 
@@ -593,7 +593,7 @@ Este endpoint síncrono usa solo texto, en lotes de 20 cartas y con 4000 tokens 
 llamada a Claude. Responde con el detalle más
 `rewrite_summary: {"updated":24,"skipped":1}`. Solo considera imágenes actuales;
 una carta omitida por Claude conserva sus textos y cuenta en skipped. Actualiza
-solo las dos claves de prompt_json, truncando a 30 y 140 caracteres. Conserva
+solo las claves de texto de prompt_json, acortando el nombre según el maná y limitando el flavor a 140 caracteres. Conserva
 archivo, cache_key, encuadre y los elementos de asignaciones existentes. Responde
 409 con un job activo y 502 con detail si Claude falla. Cambiar el idioma no invalida
 el arte: usa este endpoint para textos antiguos; rehacer el plan sí puede cambiar
@@ -923,3 +923,77 @@ Responde **201 con el DeckCard completo**, incluso si la verificación deja el e
 nuevas, falta de asignación o límite de tres alcanzado devuelven 400 con `detail`.
 Un job activo del mazo devuelve 409. La subida manual y el pegado con Ctrl+V existentes
 siguen disponibles cuando el navegador no puede descargar la imagen.
+
+## Arte original como referencia visual
+
+`Deck.original_art_mode` decide si el generador de imágenes recibe el arte original
+de Scryfall, además de la imagen que ya recibe Claude para analizar el concepto:
+
+| Modo | Referencia enviada al generador |
+|---|---|
+| `off` | Solo las referencias de personaje actuales; conserva la clave de caché anterior. |
+| `auto` (predeterminado) | Agrega el arte original si la carta no tiene referencias manuales, de wiki ni automáticas. |
+| `always` | Agrega siempre el arte original disponible, después de las referencias de personaje. |
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/decks/1/ \
+  -H 'Content-Type: application/json' -d '{"original_art_mode":"auto"}'
+```
+
+El detalle del mazo incluye el modo. El archivo original se descarga con timeout de
+20 segundos, se normaliza a JPEG y se guarda en
+`MEDIA_ROOT/cache/original_art/<scryfall_id>.jpg`. Los fallos se registran como warning
+y permiten continuar sin esa referencia. Las referencias de identidad del personaje
+van primero; la ilustración original, cuando se obtiene, va al final. El prompt
+explica el rol de cada imagen y recibe `reference_images` como cantidad de referencias
+**de personaje**, junto con `original_art_reference:true` si se envía el original.
+
+La clave incorpora `|origart:<scryfall_id>` antes de calcular el hash cuando se usa el
+arte original. Sin él conserva la clave anterior. Si la descarga falla, se registra
+el intento para que el resultado sin original siga visible y cacheado, sin descargar
+durante las consultas de detalle o estimado. Regenerar permite volver a intentar la
+referencia original. Cambiar el modo deja pendientes las cartas cuya referencia
+visual cambia. Detalle, estimado y selección de tandas usan la misma regla y consulta
+agrupada de imágenes.
+
+Claude devuelve `source_details`: elementos concretos del original, en inglés, como
+huevos, criaturas secundarias, objetos, decoraciones, motivos o iluminación. El prompt
+pide entre tres y seis detalles de hasta doce palabras; el validador acepta una lista
+vacía, conserva hasta seis textos y limita cada uno a 100 caracteres. Los prompts
+antiguos sin esa clave siguen siendo válidos y se interpretan como `[]`.
+
+En temas libres, tanto `full_prompt` como `fallback_prompt` deben conservar el concepto,
+la composición general y todos esos elementos dentro del estilo solicitado. Una reina
+de colmena en una caverna con huevos y crías debe conservarlos también en su versión
+anime. El fallback mantiene las instrucciones visuales y los roles de las referencias,
+con descripciones en lugar de nombres propios. `PROMPT_VERSION` permanece en `v3`:
+este campo opcional no invalida por sí solo el caché existente.
+
+## Nombres temáticos según el coste de maná
+
+El límite se calcula por carta: `max(14, 28 - 2 * símbolos)`, contando los tokens
+`{…}` de `mana_cost`, o de la primera cara si existe. Cinco símbolos dejan 18 caracteres,
+dos dejan 24 y una tierra sin coste tiene 28. El prompt recibe `max_name_chars` y
+`generated_image.name_limit` lo expone al front. Se prefieren nombres breves como
+«Sliver Mother» a títulos extensos con epítetos. Si un nombre excede el límite, se
+intenta quitar el sufijo tras la última coma, luego cortar por un espacio dentro del
+límite y eliminar signos sueltos al final.
+
+Para acortar únicamente nombres existentes que exceden su límite:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/rewrite-texts/ \
+  -H 'Content-Type: application/json' -d '{"only_long_names":true}'
+```
+
+Se envían a Claude solo los nombres largos. Se conserva el flavor, el archivo, el
+prompt visual, el encuadre y la clave de caché. La respuesta sigue siendo el detalle
+del mazo con un resumen que agrega el número de nombres acortados:
+
+```json
+{"rewrite_summary":{"updated":3,"skipped":0,"shortened":3}}
+```
+
+Aquí `skipped` cuenta los nombres seleccionados que Claude omitió. Si no hay nombres
+largos, no se llama a Claude. Sin el flag se reescriben nombre y flavor como antes,
+con el nuevo límite por carta y el resumen habitual `updated`/`skipped`.

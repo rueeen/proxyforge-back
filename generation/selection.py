@@ -2,9 +2,9 @@ import os
 
 from django.db.models import Case, IntegerField, Value, When
 
-from .models import GeneratedImage
+from .image_cache import generated_image_map
 from .references import reference_hashes
-from .prompt_builder import make_cache_key
+from .prompt_builder import card_cache_key
 from .providers import get_provider_name
 
 
@@ -33,9 +33,9 @@ def pending_entries(deck):
     brief = deck_brief(deck)
     entries = unique_entries(deck)
     assignments = assignment_map(deck)
-    keys = {row.card.oracle_id: make_cache_key(row.card.oracle_id, deck.theme, get_provider_name(),
-                                             assignments.get(row.card.oracle_id), brief, deck.card_layout, reference_hashes(assignments.get(row.card.oracle_id))) for row in entries}
-    cached = set(GeneratedImage.objects.filter(cache_key__in=keys.values()).values_list('cache_key', flat=True))
+    keys = {row.card.oracle_id: card_cache_key(row.card, deck.theme, get_provider_name(),
+                                             assignments.get(row.card.oracle_id), brief, deck.card_layout, reference_hashes(assignments.get(row.card.oracle_id)), original_art_mode=deck.original_art_mode) for row in entries}
+    cached = generated_image_map([row.card for row in entries], deck.theme, get_provider_name(), assignments, brief, deck.card_layout, deck.original_art_mode)
     return entries, [row for row in entries if keys[row.card.oracle_id] not in cached]
 
 

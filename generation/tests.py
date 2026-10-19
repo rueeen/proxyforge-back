@@ -27,7 +27,7 @@ from .runner import generate_card_image, render_card_image
 def valid_prompt():
     return dict(subject="árbol", action="crece", setting="bosque", palette=["#FFFFFF"],
                 style_notes="acuarela", composition="horizontal", full_prompt="Un árbol crece", fallback_prompt="Un árbol crece sin nombres",
-                concept_source="crecimiento", themed_name="Árbol ancestral", themed_flavor="La vida retorna.",
+                concept_source="crecimiento", source_details=[], themed_name="Árbol ancestral", themed_flavor="La vida retorna.",
                 frame_style=dict(border="#112233", background="#334455", text_box="#FFFFFF",
                                  accent="#008800", texture="papel"))
 
@@ -125,7 +125,7 @@ class RenderTests(SimpleTestCase):
         self.assertEqual(prompt["used_prompt"], "full")
         self.assertEqual(image, self.image_bytes)
         self.provider.generate.assert_called_once_with(valid_prompt()["full_prompt"], aspect_ratio="16:9", references=[], resolution=None)
-        build.assert_called_once_with(self.card, "tema", None, None, "classic", reference_count=0)
+        build.assert_called_once_with(self.card, "tema", None, None, "classic", reference_count=0, original_art_reference=False)
 
     @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
     def test_full_error_or_invalid_image_uses_fallback_once(self, build):
@@ -193,7 +193,7 @@ class ContractTests(TestCase):
         self.assertEqual(data['active_job']['id'], job.id)
         self.assertEqual(data['card_count'], 4)
         summary = data['cards'][0]['generated_image']
-        self.assertEqual(set(summary), {'id', 'image_url', 'theme', 'concept_source', 'themed_name', 'themed_flavor', 'frame_style', 'created_at', 'framing_offset_y', 'framing_zoom', 'framing_source', 'face_center_y', 'framing_offset_x', 'width', 'height', 'face_center_x'})
+        self.assertEqual(set(summary), {'id', 'image_url', 'theme', 'concept_source', 'themed_name', 'themed_flavor', 'frame_style', 'created_at', 'framing_offset_y', 'framing_zoom', 'framing_source', 'face_center_y', 'framing_offset_x', 'width', 'height', 'face_center_x', 'name_limit'})
         self.assertEqual(summary['themed_name'], valid_prompt()['themed_name'])
         self.assertEqual(data['cards'][0]['card']['power'], '')
         for _ in range(10):
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0007_deck_image_resolution'), ('generation', '0011_generatedimage_face_center_x_and_more')]
+        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0011_generatedimage_face_center_x_and_more')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

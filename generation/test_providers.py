@@ -97,7 +97,7 @@ class FallbackProviderTests(SimpleTestCase):
 @patch("generation.runner.build_visual_prompt", side_effect=lambda *args, **kwargs: valid_prompt())
 class ProviderAttemptTests(SimpleTestCase):
     def setUp(self):
-        self.card = SimpleNamespace(name="Tree")
+        self.card = SimpleNamespace(name="Tree", original_art_url="")
         self.primary = Mock()
         self.primary.name = "grok"
         self.backup = Mock()

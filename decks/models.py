@@ -44,6 +44,8 @@ class Card(models.Model):
 
 
 class Deck(models.Model):
+    ORIGINAL_ART_MODES = [("off", "No usar"), ("auto", "Automático"), ("always", "Siempre")]
+    original_art_mode = models.CharField(max_length=10, choices=ORIGINAL_ART_MODES, default="auto")
     name = models.CharField(max_length=200)
     raw_list = models.TextField()
     theme = models.TextField()

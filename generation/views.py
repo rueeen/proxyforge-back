@@ -18,6 +18,7 @@ from rest_framework.views import APIView
 from decks.models import Deck, DeckCard
 from decks.serializers import DeckCardSerializer, DeckDetailSerializer, deck_detail_context
 from .errors import short_error
+from .image_cache import generated_image_map
 from .framing import apply_auto_framing
 from .text_rewriter import rewrite_deck_texts
 from .wiki_sites import probe_wiki, normalize_domain, verify_assignment_pages
@@ -31,7 +32,7 @@ from .models import GeneratedImage, GenerationJob, ThemeAssignment, ReferenceIma
 from .selection import batch_limit, pending_entries, assignment_map
 from .theme_planner import plan_batch_count
 from .theme_interview import build_theme_questions, deck_brief, validate_theme_answers
-from .prompt_builder import make_cache_key
+from .prompt_builder import card_cache_key
 from .references import reference_hashes, normalize_reference, MAX_REFERENCE_BYTES
 from .providers import get_provider, get_provider_name
 from .runner import render_card_image, save_card_image, start_job, start_plan_job, start_references_job
@@ -76,16 +77,24 @@ class RegenerateCardView(APIView):
         theme = deck_card.deck.theme
         try:
             provider = get_provider()
-            key = make_cache_key(deck_card.card.oracle_id, theme, provider.name, assignment, brief, deck_card.deck.card_layout, reference_hashes(assignment))
-            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief, deck_card.deck.card_layout, resolution=deck_card.deck.image_resolution)
+            key = card_cache_key(deck_card.card, theme, provider.name, assignment, brief, deck_card.deck.card_layout, reference_hashes(assignment), original_art_mode=deck_card.deck.original_art_mode)
+            previous = generated_image_map([deck_card.card], theme, provider.name, assignments, brief,
+                deck_card.deck.card_layout, deck_card.deck.original_art_mode).get(key)
+            prompt_json, image_bytes = render_card_image(deck_card.card, theme, provider, assignment, brief, deck_card.deck.card_layout, resolution=deck_card.deck.image_resolution, original_art_mode=deck_card.deck.original_art_mode)
             with transaction.atomic():
-                old = GeneratedImage.objects.select_for_update().filter(cache_key=key).first()
-                old_file = old.image if old else None
-                if old:
+                effective_mode = 'off' if prompt_json.get('original_art_reference') is False else deck_card.deck.original_art_mode
+                actual_key = card_cache_key(deck_card.card, theme, provider.name, assignment, brief,
+                    deck_card.deck.card_layout, reference_hashes(assignment), original_art_mode=effective_mode)
+                old_keys = {key, actual_key}
+                if previous is not None:
+                    old_keys.add(previous.cache_key)
+                old_images = list(GeneratedImage.objects.select_for_update().filter(cache_key__in=old_keys))
+                old_files = [image.image for image in old_images]
+                for old in old_images:
                     old.delete()
-                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment, brief, deck_card.deck.card_layout)
-                if old_file:
-                    transaction.on_commit(lambda: old_file.delete(save=False))
+                generated = save_card_image(deck_card.card, theme, provider, prompt_json, image_bytes, assignment, brief, deck_card.deck.card_layout, original_art_mode=deck_card.deck.original_art_mode)
+                for old_file in old_files:
+                    transaction.on_commit(lambda file=old_file: file.delete(save=False))
         except Exception as exc:
             return Response({"detail": short_error(exc)}, status=status.HTTP_502_BAD_GATEWAY)
         return Response(DeckCardSerializer(deck_card, context={"request": request, "generated_images": {key: generated}, "assignments": assignments, "brief": brief}).data)
@@ -325,8 +334,8 @@ def _framing_card(card_id, request):
     image = None
     if entry.card_id:
         assignment = context['assignments'].get(entry.card.oracle_id)
-        key = make_cache_key(entry.card.oracle_id, entry.deck.theme, get_provider_name(), assignment,
-                             context['brief'], entry.deck.card_layout, reference_hashes(assignment))
+        key = card_cache_key(entry.card, entry.deck.theme, get_provider_name(), assignment,
+                             context['brief'], entry.deck.card_layout, reference_hashes(assignment), original_art_mode=entry.deck.original_art_mode)
         image = context['generated_images'].get(key)
     return entry, context, image
 
@@ -384,9 +393,12 @@ class RewriteTextsView(APIView):
         expire_stale_jobs(deck)
         if deck.jobs.filter(status__in=['pending', 'running']).exists():
             return Response({'detail': 'Hay una generación en curso para este mazo.'}, status=409)
+        only_long_names = request.data.get('only_long_names', False)
+        if type(only_long_names) is not bool:
+            return Response({'only_long_names': ['Debe ser un booleano.']}, status=400)
         context = deck_detail_context(deck, request)
         try:
-            summary = rewrite_deck_texts(deck, context)
+            summary = rewrite_deck_texts(deck, context, only_long_names=only_long_names)
         except Exception as exc:
             return Response({'detail': short_error(exc)}, status=502)
         data = DeckDetailSerializer(deck, context=context).data
