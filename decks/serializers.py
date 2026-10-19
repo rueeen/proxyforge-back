@@ -1,11 +1,11 @@
 from django.db.models import prefetch_related_objects
 from rest_framework import serializers
 
-from generation.prompt_builder import make_cache_key
+from generation.prompt_builder import card_cache_key
 from generation.references import reference_hashes
 from generation.wiki_images import reference_page_url
 from generation.serializers import ReferenceImageSerializer
-from generation.models import GeneratedImage
+from generation.image_cache import generated_image_map
 from generation.selection import assignment_map
 from generation.theme_interview import deck_brief
 from generation.serializers import GeneratedImageSummarySerializer, GenerationJobSerializer
@@ -46,7 +46,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
     def get_generated_image(self, obj):
         if not obj.card_id:
             return None
-        key = make_cache_key(obj.card.oracle_id, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"), obj.deck.card_layout, reference_hashes(self.context.get("assignments", {}).get(obj.card.oracle_id)))
+        key = card_cache_key(obj.card, obj.deck.theme, get_provider_name(), self.context.get("assignments", {}).get(obj.card.oracle_id), self.context.get("brief"), obj.deck.card_layout, reference_hashes(self.context.get("assignments", {}).get(obj.card.oracle_id)), original_art_mode=obj.deck.original_art_mode)
         generated = self.context.get("generated_images", {}).get(key)
         if not generated:
             return None
@@ -94,7 +94,7 @@ class DeckDetailSerializer(serializers.ModelSerializer):
         model = Deck
         fields = ["id", "name", "raw_list", "theme", "card_layout", "created_at", "cards", "active_job", "card_count", "has_theme_plan",
                   "theme_questions", "theme_answers", "theme_brief", "theme_plan_stale", "auto_reference_counts",
-                  "reference_wiki", "reference_wiki_alt", "reference_wiki_confirmed", "wiki_candidates", "auto_reference_count", "image_resolution"]
+                  "reference_wiki", "reference_wiki_alt", "reference_wiki_confirmed", "wiki_candidates", "auto_reference_count", "image_resolution", "original_art_mode"]
 
 
 class DeckListSerializer(serializers.ModelSerializer):
@@ -117,13 +117,12 @@ def deck_detail_context(deck, request, brief=None):
     assignments = assignment_map(deck)
     if brief is None:
         brief = deck_brief(deck)
-    keys = [make_cache_key(entry.card.oracle_id, deck.theme, get_provider_name(), assignments.get(entry.card.oracle_id), brief, deck.card_layout, reference_hashes(assignments.get(entry.card.oracle_id)))
-            for entry in deck.cards.all() if entry.card_id]
     return {
         "request": request,
         "assignments": assignments,
         "brief": brief,
-        "generated_images": {image.cache_key: image for image in GeneratedImage.objects.filter(cache_key__in=keys)},
+        "generated_images": generated_image_map([entry.card for entry in deck.cards.all() if entry.card_id],
+            deck.theme, get_provider_name(), assignments, brief, deck.card_layout, deck.original_art_mode),
         "active_job": deck.jobs.filter(status__in=["pending", "running"]).order_by("-id").first(),
     }
 
@@ -131,12 +130,12 @@ def deck_detail_context(deck, request, brief=None):
 class DeckLayoutSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError("Envía card_layout, auto_reference_count o image_resolution.")
+            raise serializers.ValidationError("Envía card_layout, auto_reference_count, image_resolution u original_art_mode.")
         return attrs
 
     auto_reference_count = serializers.IntegerField(min_value=1, max_value=3, required=False)
 
     class Meta:
         model = Deck
-        fields = ["card_layout", "auto_reference_count", "image_resolution"]
+        fields = ["card_layout", "auto_reference_count", "image_resolution", "original_art_mode"]
         extra_kwargs = {"card_layout": {"required": False}}

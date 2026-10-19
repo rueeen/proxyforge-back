@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from .models import GeneratedImage, GenerationJob, ReferenceImage
 from .wiki_images import normalize_wiki_reference
+from .card_text import themed_name_limit
 
 
 class GenerationJobSerializer(serializers.ModelSerializer):
@@ -36,6 +37,11 @@ class GeneratedImageSerializer(serializers.ModelSerializer):
 
 
 class GeneratedImageSummarySerializer(GeneratedImageSerializer):
+    name_limit = serializers.SerializerMethodField()
+
+    def get_name_limit(self, obj):
+        return themed_name_limit(obj.card)
+
     concept_source = serializers.SerializerMethodField()
     themed_name = serializers.SerializerMethodField()
     themed_flavor = serializers.SerializerMethodField()
@@ -46,7 +52,7 @@ class GeneratedImageSummarySerializer(GeneratedImageSerializer):
         fields = ["id", "image_url", "theme", "concept_source", "themed_name",
                   "themed_flavor", "frame_style", "created_at",
                   "framing_offset_y", "framing_zoom", "framing_source", "face_center_y",
-                  "framing_offset_x", "width", "height", "face_center_x"]
+                  "framing_offset_x", "width", "height", "face_center_x", "name_limit"]
 
     def get_concept_source(self, obj):
         return obj.prompt_json.get("concept_source", "")

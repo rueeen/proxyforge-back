@@ -114,13 +114,13 @@ class ProviderLayoutTests(SimpleTestCase):
         primary.generate.side_effect = [RuntimeError('full failed'), RuntimeError('fallback failed')]
         backup.generate.return_value = stream.getvalue()
         fallback.return_value = backup
-        card = SimpleNamespace(name='Card')
+        card = SimpleNamespace(name='Card', original_art_url='')
         with self.assertLogs('generation.runner', level='WARNING'):
             result, _ = render_card_image(card, 'theme', primary, layout='borderless')
         self.assertEqual(primary.generate.call_count, 2)
         self.assertTrue(all(call.kwargs['aspect_ratio'] == '3:4' for call in primary.generate.call_args_list))
         backup.generate.assert_called_once_with(valid_prompt()['fallback_prompt'], aspect_ratio='3:4', references=[], resolution=None)
-        build.assert_called_once_with(card, 'theme', None, None, 'borderless', reference_count=0)
+        build.assert_called_once_with(card, 'theme', None, None, 'borderless', reference_count=0, original_art_reference=False)
         self.assertEqual(result['used_provider'], 'gemini')
 
 
@@ -153,7 +153,7 @@ class DeckLayoutTests(TestCase):
         for body in ({'name': 'new'}, {'card_layout': 'borderless', 'theme': 'new'}):
             result = self.client.patch(self.url, body, content_type='application/json')
             self.assertEqual(result.status_code, 400)
-            self.assertEqual(result.json(), {'detail': 'Solo se puede modificar card_layout, auto_reference_count e image_resolution.'})
+            self.assertEqual(result.json(), {'detail': 'Solo se puede modificar card_layout, auto_reference_count, image_resolution y original_art_mode.'})
         for body in ({'card_layout': 'unknown'}, {'card_layout': None}, {}):
             self.assertEqual(self.client.patch(self.url, body, content_type='application/json').status_code, 400)
         GenerationJob.objects.create(deck=self.deck, total_cards=1)
@@ -224,7 +224,7 @@ class LayoutMigrationTests(TransactionTestCase):
     def test_existing_decks_classic_and_new_decks_borderless(self):
         before = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'),
                   ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
-        after = [('decks', '0007_deck_image_resolution'), ('generation', '0011_generatedimage_face_center_x_and_more')]
+        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0011_generatedimage_face_center_x_and_more')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:

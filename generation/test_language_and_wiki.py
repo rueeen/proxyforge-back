@@ -179,7 +179,7 @@ class ReliableWikiAndRewriteTests(TestCase):
             if str(image.card.oracle_id) == omitted:
                 self.assertEqual(image.prompt_json['themed_name'], 'Viejo')
             else:
-                self.assertEqual((len(image.prompt_json['themed_name']), len(image.prompt_json['themed_flavor'])), (30, 140))
+                self.assertEqual((len(image.prompt_json['themed_name']), len(image.prompt_json['themed_flavor'])), (28, 140))
         self.assignment.refresh_from_db()
         self.assertEqual(self.assignment.element, element)
 

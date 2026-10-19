@@ -15,8 +15,10 @@ from .errors import short_error
 from .framing import apply_auto_framing
 from .auto_references import enabled, fetch_auto_reference, reference_assignments
 from .references import reference_hashes
+from .original_art import get_original_art, use_original_art
+from .image_cache import generated_image_map
 from .models import GeneratedImage, GenerationJob
-from .prompt_builder import PROMPT_VERSION, build_visual_prompt, make_cache_key
+from .prompt_builder import PROMPT_VERSION, build_visual_prompt, card_cache_key
 from .selection import unique_entries, assignment_map, aspect_for_layout
 from .theme_planner import build_theme_plan
 from .theme_interview import deck_brief
@@ -40,15 +42,24 @@ def _image_extension(image_bytes):
     return extension
 
 
-def render_card_image(card, theme, provider, assignment=None, brief=None, layout="classic", resolution=None) -> tuple[dict, bytes]:
+def render_card_image(card, theme, provider, assignment=None, brief=None, layout="classic", resolution=None, original_art_mode="auto") -> tuple[dict, bytes]:
     """Llama a Claude y al proveedor; no toca la base de datos."""
     aspect_ratio = aspect_for_layout(layout)
-    references = []
+    character_refs = []
     if assignment is not None:
         for reference in assignment.references.all():
             with reference.image.open("rb") as image:
-                references.append(image.read())
-    prompt_json = build_visual_prompt(card, theme, assignment, brief, layout, reference_count=len(references))
+                character_refs.append(image.read())
+    references = list(character_refs)
+    requested_original = use_original_art(card, original_art_mode, character_refs)
+    original = get_original_art(card) if requested_original else None
+    if original is not None:
+        references.append(original)
+    prompt_json = build_visual_prompt(card, theme, assignment, brief, layout, reference_count=len(character_refs),
+                                      original_art_reference=original is not None)
+    prompt_json['original_art_reference'] = original is not None
+    if requested_original:
+        prompt_json['original_art_requested_id'] = str(card.scryfall_id)
     fallback_provider = get_fallback_provider()
     attempts = [(provider, "full"), (provider, "fallback")]
     if fallback_provider is not None:
@@ -71,10 +82,17 @@ def render_card_image(card, theme, provider, assignment=None, brief=None, layout
     raise RuntimeError(short_error("; ".join(failures))) from last_error
 
 
-def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=None, brief=None, layout="classic") -> GeneratedImage:
+def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=None, brief=None, layout="classic", original_art_mode="auto") -> GeneratedImage:
     """Detecta formato, guarda el archivo con nombre único y crea el registro."""
     extension = _image_extension(image_bytes)
-    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout, reference_hashes(assignment))
+    effective_mode = "off" if prompt_json.get("original_art_reference") is False else original_art_mode
+    cache_key = card_cache_key(card, theme, provider.name, assignment, brief, layout, reference_hashes(assignment), original_art_mode=effective_mode)
+    if prompt_json.get("original_art_requested_id") and prompt_json.get("original_art_reference") is False:
+        existing = GeneratedImage.objects.filter(cache_key=cache_key).first()
+        if existing:
+            existing.prompt_json = {**existing.prompt_json, "original_art_requested_id": prompt_json["original_art_requested_id"], "original_art_reference": False}
+            existing.save(update_fields=["prompt_json"])
+            return existing
     prompt_key = "fallback_prompt" if prompt_json["used_prompt"] == "fallback" else "full_prompt"
     with Image.open(BytesIO(image_bytes)) as image:
         width, height = image.size
@@ -99,14 +117,15 @@ def save_card_image(card, theme, provider, prompt_json, image_bytes, assignment=
     return generated
 
 
-def generate_card_image(card, theme, provider=None, assignment=None, brief=None, layout="classic", resolution=None):
+def generate_card_image(card, theme, provider=None, assignment=None, brief=None, layout="classic", resolution=None, original_art_mode="auto"):
     provider = provider or get_provider()
-    cache_key = make_cache_key(card.oracle_id, theme, provider.name, assignment, brief, layout, reference_hashes(assignment))
-    existing = GeneratedImage.objects.filter(cache_key=cache_key).first()
+    cache_key = card_cache_key(card, theme, provider.name, assignment, brief, layout, reference_hashes(assignment), original_art_mode=original_art_mode)
+    existing = generated_image_map([card], theme, provider.name, {card.oracle_id: assignment} if assignment else {},
+                                   brief, layout, original_art_mode).get(cache_key)
     if existing:
         return existing
-    prompt_json, image_bytes = render_card_image(card, theme, provider, assignment, brief, layout, resolution=resolution)
-    return save_card_image(card, theme, provider, prompt_json, image_bytes, assignment, brief, layout)
+    prompt_json, image_bytes = render_card_image(card, theme, provider, assignment, brief, layout, resolution=resolution, original_art_mode=original_art_mode)
+    return save_card_image(card, theme, provider, prompt_json, image_bytes, assignment, brief, layout, original_art_mode=original_art_mode)
 
 
 def run_job(job_id):
@@ -135,7 +154,7 @@ def run_job(job_id):
                         fetch_auto_reference(assignment)
                     except Exception:
                         logger.warning("No se pudo buscar referencia para %s; generando sin ella", card.name, exc_info=True)
-                generate_card_image(card, job.deck.theme, provider, assignment, brief, job.deck.card_layout, resolution=job.deck.image_resolution)
+                generate_card_image(card, job.deck.theme, provider, assignment, brief, job.deck.card_layout, resolution=job.deck.image_resolution, original_art_mode=job.deck.original_art_mode)
                 job.completed_cards += 1
             except Exception as exc:  # Continue so one provider failure does not abort the deck.
                 logger.exception("No se pudo generar arte para %s", card.name)
