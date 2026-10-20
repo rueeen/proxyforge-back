@@ -252,7 +252,7 @@ class ReferenceEndpointTests(TestCase):
             render_card_image(self.card, 'theme', primary, self.assignment, layout='borderless')
         self.assertTrue(all(call.kwargs['references'] == expected for call in primary.generate.call_args_list))
         self.assertEqual(backup.generate.call_args.kwargs['references'], expected)
-        self.assertEqual(backup.generate.call_args.kwargs['aspect_ratio'], '3:4')
+        self.assertEqual(backup.generate.call_args.kwargs['aspect_ratio'], '2:3')
         self.assertEqual(build.call_args.kwargs['reference_count'], 2)
 
     @patch('generation.runner.build_visual_prompt', return_value=valid_prompt())

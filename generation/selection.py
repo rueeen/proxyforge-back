@@ -77,7 +77,7 @@ def card_category(type_line):
 
 def aspect_for_layout(layout):
     if layout == "borderless":
-        return "3:4"
+        return "2:3"
     if layout == "classic":
         return "16:9"
     raise ValueError("Formato de carta no compatible")

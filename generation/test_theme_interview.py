@@ -302,7 +302,7 @@ class InterviewTests(TestCase):
         brief = deck_brief(self.deck)
         provider.return_value.name = 'gemini'
         render.return_value = ({}, b'bytes')
-        image = GeneratedImage(card=self.card, theme=self.deck.theme, image='generated/mock.png', prompt_json={})
+        image = GeneratedImage(pk=999, card=self.card, theme=self.deck.theme, image='generated/mock.png', prompt_json={})
         save.return_value = image
         result = self.client.post(f'/api/cards/{self.entry.id}/regenerate/', {}, content_type='application/json')
         self.assertEqual(result.status_code, 200)

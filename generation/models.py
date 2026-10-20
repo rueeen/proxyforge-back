@@ -26,6 +26,7 @@ class GenerationJob(models.Model):
 
 
 class GeneratedImage(models.Model):
+    framing_stretch_y = models.FloatField(default=100)
     framing_offset_x = models.FloatField(default=0)
     width = models.PositiveIntegerField(null=True, blank=True)
     height = models.PositiveIntegerField(null=True, blank=True)
@@ -95,3 +96,9 @@ class WikiSite(models.Model):
     main_page_url = models.URLField(max_length=1000, blank=True)
     error = models.CharField(max_length=200, blank=True)
     checked_at = models.DateTimeField()
+
+
+@receiver(post_delete, sender=GeneratedImage)
+def delete_generated_thumbnails(sender, instance, **kwargs):
+    from .thumbnails import delete_thumbnails
+    delete_thumbnails(instance)

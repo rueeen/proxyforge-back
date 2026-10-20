@@ -19,6 +19,9 @@ class SymbologyTests(TestCase):
         self.path = Path(directory.name) / 'cache' / 'symbology.json'
         self.data = [{'symbol': '{R}', 'svg_uri': 'https://svgs.scryfall.io/card-symbols/R.svg', 'english': 'one red mana'}]
 
+    def local(self, items):
+        return [{**item, 'local_svg_uri': 'http://testserver/api/symbology/svg/' + item['symbol'].strip('{}').replace('/', '-') + '.svg'} for item in items]
+
     def cache(self, expired=False):
         self.path.parent.mkdir(parents=True)
         self.path.write_text(json.dumps(self.data))
@@ -29,7 +32,7 @@ class SymbologyTests(TestCase):
     @patch('scryfall.views.requests.get')
     def test_fresh_cache(self, get):
         self.cache()
-        self.assertEqual(self.client.get('/api/symbology/').json(), self.data)
+        self.assertEqual(self.client.get('/api/symbology/').json(), self.local(self.data))
         get.assert_not_called()
 
     @patch('scryfall.views.requests.get')
@@ -40,7 +43,7 @@ class SymbologyTests(TestCase):
         get.return_value.json.return_value = {'data': [{**new[0], 'other': 'ignored'}]}
         result = self.client.get('/api/symbology/')
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json(), new)
+        self.assertEqual(result.json(), self.local(new))
         self.assertEqual(json.loads(self.path.read_text()), new)
         from .client import HEADERS
         get.assert_called_once_with('https://api.scryfall.com/symbology', headers=HEADERS, timeout=30)
@@ -50,7 +53,7 @@ class SymbologyTests(TestCase):
         self.cache(expired=True)
         result = self.client.get('/api/symbology/')
         self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json(), self.data)
+        self.assertEqual(result.json(), self.local(self.data))
 
     @patch('scryfall.views.requests.get', side_effect=requests.ConnectionError('offline'))
     def test_no_cache_failure(self, get):

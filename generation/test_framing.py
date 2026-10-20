@@ -75,10 +75,11 @@ class FramingCalculationTests(SimpleTestCase):
         from decks.models import Card
         build_visual_prompt(Card(name='Card'), 'theme', layout='borderless')
         system = anthropic.return_value.messages.create.call_args.kwargs['system']
-        self.assertIn('entre el 20% y el 45%', system)
-        self.assertIn('NUNCA en el 15% superior', system)
-        self.assertIn('Vertical 3:4 composition, head positioned in the upper-middle', system)
+        self.assertIn('entre el 18% y el 40%', system)
+        self.assertIn('nunca en el 12% superior', system)
+        self.assertIn('Vertical 2:3 composition. Head in the upper third', system)
         self.assertIn('termina full_prompt y fallback_prompt', system)
+        self.assertNotIn('3:4', system)
         self.assertEqual(PROMPT_VERSION, 'v3')
 
 

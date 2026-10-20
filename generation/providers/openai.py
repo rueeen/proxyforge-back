@@ -17,5 +17,5 @@ class OpenAIProvider(ImageProvider):
         if references:
             logger.info("OpenAI ignora las imágenes de referencia; generando solo con texto")
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        result = client.images.generate(model="gpt-image-1", prompt=prompt, size="1024x1536" if aspect_ratio == "3:4" else "1536x1024")
+        result = client.images.generate(model="gpt-image-1", prompt=prompt, size="1024x1536" if aspect_ratio in ("3:4", "2:3") else "1536x1024")
         return base64.b64decode(result.data[0].b64_json)

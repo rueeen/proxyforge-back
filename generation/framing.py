@@ -60,6 +60,9 @@ def auto_framing(face_x, face_y, img_w, img_h, layout):
     offset_y = 32 - 50 + h / 2 - face_y * h
     if offset_y < 0 and 50 - h / 2 + face_y * h >= 26:
         offset_y = 0
+    if h > 100 and 50 + offset_y - h / 2 > 0:
+        # Prioritize no top gap when a very high face cannot reach the target band.
+        offset_y = math.floor((h / 2 - 50) * 10) / 10
     lateral_limit = (w - 100) / 2
     offset_x = max(-lateral_limit, min(lateral_limit, (0.5 - face_x) * w))
     return round(max(-60, min(60, offset_x)), 1), round(max(-60, min(60, offset_y)), 1), 100

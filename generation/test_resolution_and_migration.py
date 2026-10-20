@@ -82,7 +82,7 @@ class FreeFramingMigrationTests(TransactionTestCase):
     def test_existing_framing_dimensions_missing_files_and_deck_resolution(self):
         before = [('decks', '0006_deck_auto_reference_count_deck_reference_wiki_and_more'),
                   ('generation', '0010_generationjob_kind_generationjob_options_and_more')]
-        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0011_generatedimage_face_center_x_and_more')]
+        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0012_generatedimage_framing_stretch_y')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:

@@ -3,9 +3,10 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
-from scryfall.views import SymbologyView
+from scryfall.views import SymbologyView, SymbolSvgView
 
 urlpatterns = [
+    path("api/symbology/svg/<str:code>.svg", SymbolSvgView.as_view(), name="symbology-svg"),
     path("api/symbology/", SymbologyView.as_view(), name="symbology"),
     path("admin/", admin.site.urls),
     path("api/", include("decks.urls")),

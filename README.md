@@ -351,8 +351,8 @@ caracteres. El contrato de la API, PROMPT_VERSION v3 y las claves de caché se m
 ## Formato de carta: sin borde o clásico
 
 Los mazos nuevos usan `card_layout:"borderless"` por defecto: ilustración vertical
-3:4 a sangre completa, con el rostro entre el 20% y el 45% del alto y nunca en el 15% superior. El 10% superior
-y el 40% inferior dejan espacio visual para las placas translúcidas del frontend;
+2:3 a sangre completa, con el rostro entre el 18% y el 40% del alto y nunca en el 12% superior.
+El sujeto completo debe caber en el 62% superior; el 38% inferior extiende el escenario para la caja de texto;
 la imagen generada sigue sin incluir texto ni marcos. Los prompts describen los
 rasgos anatómicos y variantes de época de cada especie para evitar confusiones
 como troll/orco; el planner pide comprobar facción, tribu y raza canónicas.
@@ -382,7 +382,7 @@ Cambiar a sin borde deja pendientes las cartas que no tengan arte vertical. Gene
 las tandas para ese formato; volver a clásico recupera las imágenes horizontales
 cacheadas. Se conservan las claves de caché clásicas y PROMPT_VERSION sigue en v3.
 
-Grok y Gemini reciben 3:4 o 16:9; OpenAI usa respectivamente 1024x1536 o 1536x1024,
+Grok y Gemini reciben 2:3 o 16:9; OpenAI usa respectivamente 1024x1536 o 1536x1024,
 sus tamaños vertical/horizontal disponibles. Todos los intentos, incluido el
 proveedor de respaldo, usan el mismo formato. Con google-genai 1.38 se envía
 imageConfig mediante HttpOptions.extra_body, sin actualizar dependencias.
@@ -997,3 +997,102 @@ del mazo con un resumen que agrega el número de nombres acortados:
 Aquí `skipped` cuenta los nombres seleccionados que Claude omitió. Si no hay nombres
 largos, no se llama a Claude. Sin el flag se reescriben nombre y flavor como antes,
 con el nuevo límite por carta y el resumen habitual `updated`/`skipped`.
+
+## Arte más alto y estiramiento vertical
+
+Las imágenes nuevas o regeneradas del formato sin borde se solicitan en **2:3**;
+el formato clásico conserva **16:9**. Los proveedores siguen aceptando 3:4 para
+compatibilidad. El prompt pide al sujeto completo, incluida su pose y lo que sostiene,
+en el 62% superior, y una extensión tranquila del escenario en el 38% inferior.
+
+El cambio de aspecto **no modifica la cache_key ni PROMPT_VERSION**. Las imágenes
+3:4 existentes se conservan: puedes regenerarlas o aplicar un ajuste manual acotado:
+
+```bash
+curl -X PATCH http://127.0.0.1:8000/api/cards/12/framing/ \
+  -H 'Content-Type: application/json' -d '{"stretch_y":107}'
+```
+
+`generated_image.framing_stretch_y` es una escala vertical extra de 100 a 112, con
+100 por defecto. El PATCH recorta el valor a ese rango y marca el encuadre manual.
+El autoencuadre no lo modifica; la acción «Llenar» del front puede enviar 100 para
+restablecerlo. Las imágenes 3:4 conservan su comportamiento de autoencuadre anterior.
+
+Para las imágenes más altas que la carta, el autoencuadre usa el excedente vertical
+y prioriza evitar el hueco superior. Cuando es posible, deja el rostro entre el 26%
+y el 45%; si la cara está demasiado arriba, se conserva más alta antes que dejar
+un hueco. Por ejemplo, con 832×1248 y rostro en y=0,1 no se pueden cumplir ambas cosas
+a zoom 100: el ajuste sin hueco deja el rostro aproximadamente al 10,7%.
+
+## Miniaturas y recursos locales para rasterizar cartas
+
+La grilla puede cargar `generated_image.thumb_url`, una URL absoluta del backend,
+en lugar del arte completo. El arte original de alta resolución sigue disponible
+en `image_url` para la vista ampliada y la exportación.
+
+```http
+GET /api/images/3/thumb/?w=480
+GET /api/symbology/svg/W.svg
+GET /api/symbology/svg/2-W.svg
+GET /api/symbology/svg/G-P.svg
+GET /api/cards/12/original-art/
+```
+
+- Las miniaturas son WEBP a calidad 82, con ancho 320, 480 u 800 y proporción original.
+  Otro `w` usa 480. Se cachean en `media/cache/thumbs/<id>-<width>.webp`, se regeneran
+  si la imagen fuente es más nueva y se eliminan al borrar el registro. Se sirven
+  con `Cache-Control: public, max-age=604800`; un id o archivo ausente devuelve 404.
+- `/api/symbology/` conserva sus campos y agrega `local_svg_uri` a cada símbolo.
+  Los SVG se guardan en `media/cache/symbols/<code>.svg` y se sirven con caché de
+  30 días. El código quita las llaves y sustituye `/` por `-`: `{W/P}` se pide como
+  `W-P.svg`. Un símbolo inexistente devuelve 404.
+- **DeckCard** agrega `original_art_local_url`, usando su propio id de entrada;
+  vale null si la carta no tiene arte original. El endpoint usa el JPEG cacheado de
+  Scryfall y lo sirve con caché de siete días; sin arte disponible devuelve 404.
+
+CORS está habilitado para `/api/` y `/media/`, con los orígenes
+`http://localhost:5173` y `http://127.0.0.1:5173`. En desarrollo, `/media/` continúa
+servido por `static()` de Django con DEBUG. Esto permite que el front lea los bytes
+locales al rasterizar la carta; debe usar las URLs locales y configurar CORS en sus
+imágenes. No necesita leer directamente los recursos de los dominios de Scryfall.
+
+## PDF de impresión con imágenes a 300 dpi
+
+El **front rasteriza cada carta única completa a JPEG o PNG** (incluido texto,
+marco y encuadre), y el backend ensambla esas imágenes con Pillow. La exportación
+no usa `window.print()`, filtros CSS, máscaras ni fuentes externas en el PDF.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/decks/1/export-pdf/ \
+  -F 'paper=a4' -F 'cut_marks=true' -F 'bleed_mm=0' \
+  -F 'images=@carta12.jpg' -F 'images=@carta15.jpg' \
+  -F 'keys=["12","15"]' -F 'layout=["12","12","12","12","15"]' \
+  -o mazo-proxies.pdf
+```
+
+`keys` es una lista de ids de DeckCard en texto, alineada con los archivos `images`:
+se puede enviar como array JSON serializado o campo repetido. `layout` siempre es
+un string JSON con el orden final de impresión; repite una clave para imprimir
+varias copias sin subir de nuevo el archivo. Todas las claves deben pertenecer al
+mazo. Se permiten de 1 a 150 imágenes JPEG/PNG de hasta 4 MB cada una, y de 1 a 400
+claves en layout. Archivos inválidos, claves desconocidas, desalineadas o repetidas
+en keys, valores de papel inválidos o sangrado distinto de cero devuelven **400**
+con `detail`. El límite de memoria de subida de Django está configurado en 200 MB.
+
+`paper` admite `a4` (2480×3508 px) o `letter` (2550×3300 px); por defecto usa A4.
+Cada carta se convierte a RGB y se redimensiona exactamente a **744×1039 px**
+(63×88 mm a 300 dpi). Se coloca en una grilla fija 3×3, sin separación y centrada
+en la página. Cada nueve claves comienza otra página; la última puede quedar
+incompleta. Con 100 cartas se generan 12 páginas.
+
+`cut_marks` admite `true` o `false` y por defecto es true. Las marcas son grises,
+de 3 px de grosor y 40 px de largo, proyectadas sobre los márgenes exteriores para
+cada línea de corte de la grilla. Como no hay separación entre cartas, las marcas
+no se dibujan sobre el arte de las vecinas. `bleed_mm` queda preparado y actualmente
+solo admite 0.
+
+Las páginas pasan a JPEG de calidad 88 en memoria antes del guardado PDF a 300 dpi.
+La respuesta es `application/pdf`, con
+`Content-Disposition: attachment; filename="<slug-del-mazo>-proxies.pdf"`. El PDF
+se genera en memoria y no se guarda en disco. El log INFO de `generation.pdf_export`
+informa el tiempo de ensamblado, la cantidad de páginas y el tamaño final.

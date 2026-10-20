@@ -193,7 +193,7 @@ class ContractTests(TestCase):
         self.assertEqual(data['active_job']['id'], job.id)
         self.assertEqual(data['card_count'], 4)
         summary = data['cards'][0]['generated_image']
-        self.assertEqual(set(summary), {'id', 'image_url', 'theme', 'concept_source', 'themed_name', 'themed_flavor', 'frame_style', 'created_at', 'framing_offset_y', 'framing_zoom', 'framing_source', 'face_center_y', 'framing_offset_x', 'width', 'height', 'face_center_x', 'name_limit'})
+        self.assertEqual(set(summary), {'id', 'image_url', 'theme', 'concept_source', 'themed_name', 'themed_flavor', 'frame_style', 'created_at', 'framing_offset_y', 'framing_zoom', 'framing_source', 'face_center_y', 'framing_offset_x', 'width', 'height', 'face_center_x', 'name_limit', 'framing_stretch_y', 'thumb_url'})
         self.assertEqual(summary['themed_name'], valid_prompt()['themed_name'])
         self.assertEqual(data['cards'][0]['card']['power'], '')
         for _ in range(10):
@@ -331,7 +331,7 @@ class BackfillMigrationTests(TransactionTestCase):
     def test_existing_rows_are_backfilled_by_migration(self):
         executor = MigrationExecutor(connection)
         before = [('decks', '0001_initial'), ('generation', '0001_initial')]
-        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0011_generatedimage_face_center_x_and_more')]
+        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0012_generatedimage_framing_stretch_y')]
         executor.migrate(before)
         try:
             old_apps = executor.loader.project_state(before).apps

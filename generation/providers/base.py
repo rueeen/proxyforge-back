@@ -7,5 +7,5 @@ class ImageProvider:
 
 
 def validate_aspect_ratio(aspect_ratio):
-    if aspect_ratio not in ("16:9", "3:4"):
+    if aspect_ratio not in ("16:9", "3:4", "2:3"):
         raise ValueError("Relación de aspecto no compatible")

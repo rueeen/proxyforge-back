@@ -28,7 +28,7 @@ class ProviderLayoutTests(SimpleTestCase):
     @patch('generation.providers.grok.OpenAI')
     def test_grok_ratios(self, client):
         client.return_value.images.generate.return_value = SimpleNamespace(data=[SimpleNamespace(b64_json='aW1hZ2U=')])
-        for ratio in ('16:9', '3:4'):
+        for ratio in ('16:9', '3:4', '2:3'):
             with self.subTest(ratio=ratio):
                 self.assertEqual(GrokProvider().generate('prompt', ratio), b'image')
                 self.assertEqual(client.return_value.images.generate.call_args.kwargs['extra_body']['aspect_ratio'], ratio)
@@ -38,7 +38,7 @@ class ProviderLayoutTests(SimpleTestCase):
         part = SimpleNamespace(inline_data=SimpleNamespace(data=b'image'))
         client.return_value.models.generate_content.return_value = SimpleNamespace(
             candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))])
-        for ratio in ('16:9', '3:4'):
+        for ratio in ('16:9', '3:4', '2:3'):
             with self.subTest(ratio=ratio):
                 self.assertEqual(GeminiProvider().generate('prompt', ratio), b'image')
                 config = client.return_value.models.generate_content.call_args.kwargs['config']
@@ -69,7 +69,7 @@ class ProviderLayoutTests(SimpleTestCase):
     @patch('generation.providers.openai.OpenAI')
     def test_openai_sizes(self, client):
         client.return_value.images.generate.return_value = SimpleNamespace(data=[SimpleNamespace(b64_json='aW1hZ2U=')])
-        for ratio, size in (('16:9', '1536x1024'), ('3:4', '1024x1536')):
+        for ratio, size in (('16:9', '1536x1024'), ('3:4', '1024x1536'), ('2:3', '1024x1536')):
             with self.subTest(ratio=ratio):
                 self.assertEqual(OpenAIProvider().generate('prompt', ratio), b'image')
                 self.assertEqual(client.return_value.images.generate.call_args.kwargs['size'], size)
@@ -80,7 +80,7 @@ class ProviderLayoutTests(SimpleTestCase):
                 with self.subTest(provider=provider.name, ratio=ratio), self.assertRaises(ValueError):
                     provider.generate('prompt', ratio)
         self.assertEqual(aspect_for_layout('classic'), '16:9')
-        self.assertEqual(aspect_for_layout('borderless'), '3:4')
+        self.assertEqual(aspect_for_layout('borderless'), '2:3')
         with self.assertRaises(ValueError):
             aspect_for_layout('unknown')
 
@@ -95,8 +95,8 @@ class ProviderLayoutTests(SimpleTestCase):
             args = anthropic.return_value.messages.create.call_args.kwargs
             self.assertEqual(json.loads(args['messages'][0]['content'][0]['text'])['layout'], layout)
             if layout == 'borderless':
-                self.assertIn('VERTICAL 3:4', args['system'])
-                self.assertIn('40% inferior', args['system'])
+                self.assertIn('VERTICAL 2:3', args['system'])
+                self.assertIn('38% inferior', args['system'])
                 self.assertNotIn(CLASSIC_COMPOSITION, args['system'])
             else:
                 self.assertIn(CLASSIC_COMPOSITION, args['system'])
@@ -118,8 +118,8 @@ class ProviderLayoutTests(SimpleTestCase):
         with self.assertLogs('generation.runner', level='WARNING'):
             result, _ = render_card_image(card, 'theme', primary, layout='borderless')
         self.assertEqual(primary.generate.call_count, 2)
-        self.assertTrue(all(call.kwargs['aspect_ratio'] == '3:4' for call in primary.generate.call_args_list))
-        backup.generate.assert_called_once_with(valid_prompt()['fallback_prompt'], aspect_ratio='3:4', references=[], resolution=None)
+        self.assertTrue(all(call.kwargs['aspect_ratio'] == '2:3' for call in primary.generate.call_args_list))
+        backup.generate.assert_called_once_with(valid_prompt()['fallback_prompt'], aspect_ratio='2:3', references=[], resolution=None)
         build.assert_called_once_with(card, 'theme', None, None, 'borderless', reference_count=0, original_art_reference=False)
         self.assertEqual(result['used_provider'], 'gemini')
 
@@ -193,7 +193,7 @@ class DeckLayoutTests(TestCase):
         self.deck.save()
         provider.return_value.name = 'gemini'
         render.return_value = ({}, b'bytes')
-        save.return_value = GeneratedImage(card=self.card, theme='theme', image='generated/mock.png', prompt_json={})
+        save.return_value = GeneratedImage(pk=999, card=self.card, theme='theme', image='generated/mock.png', prompt_json={})
         result = self.client.post(f'/api/cards/{self.entry.id}/regenerate/', {}, content_type='application/json')
         self.assertEqual(result.status_code, 200)
         self.assertEqual(render.call_args.args[5], 'borderless')
@@ -210,7 +210,7 @@ class DeckLayoutTests(TestCase):
         with tempfile.TemporaryDirectory() as media, self.settings(MEDIA_ROOT=media):
             image = generate_card_image(self.card, 'theme', provider, layout='borderless')
             self.assertEqual(image.cache_key, make_cache_key(self.card.oracle_id, 'theme', 'gemini', layout='borderless'))
-            provider.generate.assert_called_once_with(valid_prompt()['full_prompt'], aspect_ratio='3:4', references=[], resolution=None)
+            provider.generate.assert_called_once_with(valid_prompt()['full_prompt'], aspect_ratio='2:3', references=[], resolution=None)
             self.deck.card_layout = 'borderless'
             self.deck.save()
             self.assertIsNotNone(self.client.get(self.url).json()['cards'][0]['generated_image'])
@@ -224,7 +224,7 @@ class LayoutMigrationTests(TransactionTestCase):
     def test_existing_decks_classic_and_new_decks_borderless(self):
         before = [('decks', '0004_deck_theme_answers_deck_theme_answers_updated_at_and_more'),
                   ('generation', '0003_generationjob_card_oracle_ids_themeassignment')]
-        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0011_generatedimage_face_center_x_and_more')]
+        after = [('decks', '0008_deck_original_art_mode'), ('generation', '0012_generatedimage_framing_stretch_y')]
         executor = MigrationExecutor(connection)
         executor.migrate(before)
         try:

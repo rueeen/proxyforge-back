@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.urls import reverse
 
 from .models import GeneratedImage, GenerationJob, ReferenceImage
 from .wiki_images import normalize_wiki_reference
@@ -37,6 +38,13 @@ class GeneratedImageSerializer(serializers.ModelSerializer):
 
 
 class GeneratedImageSummarySerializer(GeneratedImageSerializer):
+    thumb_url = serializers.SerializerMethodField()
+
+    def get_thumb_url(self, obj):
+        url = reverse('image-thumb', args=[obj.pk]) + '?w=480'
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
+
     name_limit = serializers.SerializerMethodField()
 
     def get_name_limit(self, obj):
@@ -52,7 +60,7 @@ class GeneratedImageSummarySerializer(GeneratedImageSerializer):
         fields = ["id", "image_url", "theme", "concept_source", "themed_name",
                   "themed_flavor", "frame_style", "created_at",
                   "framing_offset_y", "framing_zoom", "framing_source", "face_center_y",
-                  "framing_offset_x", "width", "height", "face_center_x", "name_limit"]
+                  "framing_offset_x", "width", "height", "face_center_x", "name_limit", "framing_stretch_y", "thumb_url"]
 
     def get_concept_source(self, obj):
         return obj.prompt_json.get("concept_source", "")

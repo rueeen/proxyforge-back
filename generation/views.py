@@ -5,10 +5,15 @@ from uuid import uuid4
 
 import requests
 from django.core.files.base import ContentFile
+from django.http import FileResponse, HttpResponse
+from .thumbnails import get_thumbnail
+from .original_art import get_original_art
 from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
+from django.utils.text import slugify
+from .pdf_export import build_pdf, MAX_IMAGE_BYTES
 from django.shortcuts import get_object_or_404
 from rest_framework import status, serializers
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -350,7 +355,7 @@ class CardFramingView(APIView):
         values = {'framing_source': 'manual'}
         for field, target, lower, upper in (
             ('offset_x', 'framing_offset_x', -60, 60), ('offset_y', 'framing_offset_y', -60, 60),
-            ('zoom', 'framing_zoom', 50, 300),
+            ('zoom', 'framing_zoom', 50, 300), ('stretch_y', 'framing_stretch_y', 100, 112),
         ):
             if field in request.data:
                 value = request.data[field]
@@ -637,3 +642,69 @@ class BrowserReferencesView(AssignmentReferencesView):
                     reference.image.delete(save=False)
                 raise
         return self._response(entry, status=201)
+
+
+class ImageThumbnailView(APIView):
+    def get(self, request, generated_id):
+        generated = get_object_or_404(GeneratedImage, pk=generated_id)
+        raw_width = request.query_params.get('w', '480')
+        width = int(raw_width) if raw_width in ('320', '480', '800') else 480
+        try:
+            path = get_thumbnail(generated, width)
+            response = FileResponse(path.open('rb'), content_type='image/webp')
+        except (OSError, ValueError):
+            return Response({'detail': 'La imagen no existe o no se puede leer.'}, status=404)
+        response['Cache-Control'] = 'public, max-age=604800'
+        return response
+
+
+class OriginalArtView(APIView):
+    def get(self, request, card_id):
+        entry = get_object_or_404(DeckCard.objects.select_related('card'), pk=card_id)
+        raw = get_original_art(entry.card) if entry.card_id else None
+        if raw is None:
+            return Response({'detail': 'La carta no tiene arte original disponible.'}, status=404)
+        response = HttpResponse(raw, content_type='image/jpeg')
+        response['Cache-Control'] = 'public, max-age=604800'
+        return response
+
+
+class ExportPdfView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, deck_id):
+        deck = get_object_or_404(Deck, pk=deck_id)
+        images = request.FILES.getlist('images')
+        if not 1 <= len(images) <= 150:
+            return Response({'detail': 'Envía entre 1 y 150 imágenes.'}, status=400)
+        try:
+            keys = request.data.getlist('keys')
+            if len(keys) == 1 and keys[0].lstrip().startswith('['):
+                keys = json.loads(keys[0])
+            if not isinstance(keys, list) or len(keys) != len(images) or any(not isinstance(key, str) for key in keys):
+                raise ValueError('keys debe ser una lista alineada con images.')
+            if len(set(keys)) != len(keys):
+                raise ValueError('Las claves de keys no deben repetirse.')
+            deck_keys = {str(pk) for pk in deck.cards.values_list('pk', flat=True)}
+            if not set(keys) <= deck_keys:
+                raise ValueError('Las claves deben corresponder a cartas de este mazo.')
+            layout = json.loads(request.data.get('layout', 'null'))
+            paper = request.data.get('paper', 'a4')
+            cut_marks = request.data.get('cut_marks', 'true')
+            if cut_marks not in ('true', 'false'):
+                raise ValueError('cut_marks debe ser true o false.')
+            bleed = float(request.data.get('bleed_mm', '0'))
+            if bleed != 0:
+                raise ValueError('Por ahora bleed_mm debe ser 0.')
+            raw_images = {}
+            for key, image in zip(keys, images):
+                if image.size > MAX_IMAGE_BYTES:
+                    raise ValueError('Cada imagen debe pesar como máximo 4 MB.')
+                raw_images[key] = image.read(MAX_IMAGE_BYTES + 1)
+            pdf = build_pdf(raw_images, layout, paper, cut_marks == 'true', bleed)
+        except (ValueError, TypeError) as exc:
+            return Response({'detail': str(exc)}, status=400)
+        filename = f'{slugify(deck.name) or "deck"}-proxies.pdf'
+        response = HttpResponse(pdf, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response

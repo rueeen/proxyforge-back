@@ -1,8 +1,11 @@
 from django.urls import path
 
-from .views import BrowserReferencesView, WikiCandidatesView, ReferenceWikiView, WikiImagesView, WikiReferenceView, RewriteTextsView, CardFramingView, CardAutoFramingView, DeckAutoFramingView, AutoReferencesView, AutoReferenceView, AssignmentReferencesView, ThemeQuestionsView, ThemeAnswersView, ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
+from .views import ExportPdfView, ImageThumbnailView, OriginalArtView, BrowserReferencesView, WikiCandidatesView, ReferenceWikiView, WikiImagesView, WikiReferenceView, RewriteTextsView, CardFramingView, CardAutoFramingView, DeckAutoFramingView, AutoReferencesView, AutoReferenceView, AssignmentReferencesView, ThemeQuestionsView, ThemeAnswersView, ThemePlanView, ThemeAssignmentView, DeckEstimateView, GenerateDeckView, JobDetailView, RegenerateCardView
 
 urlpatterns = [
+    path("decks/<int:deck_id>/export-pdf/", ExportPdfView.as_view(), name="export-pdf"),
+    path("images/<int:generated_id>/thumb/", ImageThumbnailView.as_view(), name="image-thumb"),
+    path("cards/<int:card_id>/original-art/", OriginalArtView.as_view(), name="original-art"),
     path("cards/<int:card_id>/theme-assignment/references/browser/", BrowserReferencesView.as_view(), name="browser-references"),
     path("decks/<int:deck_id>/wiki-candidates/", WikiCandidatesView.as_view(), name="wiki-candidates"),
     path("decks/<int:deck_id>/reference-wiki/", ReferenceWikiView.as_view(), name="reference-wiki"),

@@ -1,4 +1,5 @@
 from django.db.models import prefetch_related_objects
+from django.urls import reverse
 from rest_framework import serializers
 
 from generation.prompt_builder import card_cache_key
@@ -27,6 +28,15 @@ class CardSerializer(serializers.ModelSerializer):
 
 
 class DeckCardSerializer(serializers.ModelSerializer):
+    original_art_local_url = serializers.SerializerMethodField()
+
+    def get_original_art_local_url(self, obj):
+        if not obj.card_id or not obj.card.original_art_url:
+            return None
+        url = reverse('original-art', args=[obj.pk])
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
+
     card = CardSerializer(read_only=True)
     generated_image = serializers.SerializerMethodField()
     theme_assignment = serializers.SerializerMethodField()
@@ -41,7 +51,7 @@ class DeckCardSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = DeckCard
-        fields = ["id", "card", "raw_name", "quantity", "section", "resolution_error", "generated_image", "theme_assignment"]
+        fields = ["id", "card", "raw_name", "quantity", "section", "resolution_error", "generated_image", "theme_assignment", "original_art_local_url"]
 
     def get_generated_image(self, obj):
         if not obj.card_id:
